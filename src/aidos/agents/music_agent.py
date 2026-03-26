@@ -2,8 +2,6 @@
 
 import logging
 import re
-import subprocess
-import threading
 from pathlib import Path
 
 import pygame
@@ -69,34 +67,39 @@ def _search_youtube(search_query: str) -> dict | None:
     return None
 
 
-def _get_audio_url(video_id: str) -> str | None:
-    """Видео ID арқылы аудио stream URL алу."""
+def _download_audio(video_id: str, output_path: Path) -> bool:
+    """Видео ID арқылы аудио файл жүктеу."""
     import yt_dlp
 
+    url = f"https://www.youtube.com/watch?v={video_id}"
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
         "format": "bestaudio[ext=m4a]/bestaudio/best",
+        "outtmpl": str(output_path.with_suffix("")),
+        "postprocessors": [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "128",
+        }],
     }
 
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    logger.debug("Аудио URL алынуда: %s", url)
+    logger.info("Аудио жүктелуде: %s", url)
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            audio_url = info.get("url")
-            logger.debug("Аудио URL алынды")
-            return audio_url
+            ydl.download([url])
+        logger.debug("Аудио жүктелді: %s", output_path)
+        return True
     except Exception as exc:
-        logger.error("Аудио URL қатесі: %s", exc)
-    return None
+        logger.error("Аудио жүктеу қатесі: %s", exc)
+        return False
 
 
 class MusicAgent:
     def __init__(self) -> None:
         self._initialized = False
         self._current_title: str | None = None
-        self._mpv_process: subprocess.Popen | None = None
+        self._tmp_file: Path | None = None
         logger.debug("MusicAgent инициализацияланды")
 
     def _ensure_pygame(self) -> bool:
@@ -132,48 +135,43 @@ class MusicAgent:
 
         entry = _search_youtube(search_query)
         if not entry:
-            logger.warning("YouTube-тен '%s' табылмады, жергілікті файлдар тексерілуде", search_query)
+            logger.warning("YouTube-тен '%s' табылмады", search_query)
             return self._play_local()
 
         title = entry.get("title", search_query)
         video_id = entry.get("id")
-
         if not video_id:
             return self._play_local()
 
-        audio_url = _get_audio_url(video_id)
-        if not audio_url:
-            return f"'{title}' ойнату мүмкін болмады."
-
         self._current_title = title
 
-        # mpv арқылы стриминг (фонда)
-        try:
-            self._mpv_process = subprocess.Popen(
-                ["mpv", "--no-video", "--really-quiet", audio_url],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            logger.info("YouTube ойнатылуда: '%s'", title)
-            return f"Ойнатылуда: {title}"
-        except FileNotFoundError:
-            logger.warning("mpv табылмады, pygame fallback")
-            return self._play_pygame_url(audio_url, title)
-        except Exception as exc:
-            logger.error("mpv қатесі: %s", exc)
-            return f"Ойнату мүмкін болмады: {exc}"
+        # Temp файлға жүктеп pygame-мен ойнату
+        import tempfile
+        tmp_dir = Path(tempfile.mkdtemp())
+        tmp_file = tmp_dir / "audio.mp3"
 
-    def _play_pygame_url(self, url: str, title: str) -> str:
-        """pygame арқылы URL ойнату (fallback)."""
+        if not _download_audio(video_id, tmp_file):
+            return f"'{title}' жүктеу мүмкін болмады."
+
+        # Нақты mp3 файлды табу (yt-dlp extension қосуы мүмкін)
+        mp3_files = list(tmp_dir.glob("*.mp3"))
+        if not mp3_files:
+            return f"'{title}' аудио файл табылмады."
+
+        actual_file = mp3_files[0]
+        self._tmp_file = actual_file
+
         if not self._ensure_pygame():
             return "Аудио жүйесі іске қоспады."
+
         try:
-            pygame.mixer.music.load(url)
+            pygame.mixer.music.load(str(actual_file))
             pygame.mixer.music.play()
+            logger.info("YouTube ойнатылуда: '%s'", title)
             return f"Ойнатылуда: {title}"
         except Exception as exc:
-            logger.error("pygame URL ойнату қатесі: %s", exc)
-            return self._play_local()
+            logger.error("pygame ойнату қатесі: %s", exc)
+            return f"Ойнату мүмкін болмады: {exc}"
 
     def _play_local(self) -> str:
         """Жергілікті музыка қалтасынан ойнату."""
@@ -199,27 +197,23 @@ class MusicAgent:
             return f"Ойнату мүмкін болмады: {exc}"
 
     def _stop(self) -> str:
-        if self._mpv_process:
-            self._mpv_process.terminate()
-            self._mpv_process = None
-            logger.info("mpv тоқтатылды")
         if self._initialized:
             pygame.mixer.music.stop()
+        if self._tmp_file and self._tmp_file.exists():
+            self._tmp_file.unlink(missing_ok=True)
+            self._tmp_file = None
         self._current_title = None
+        logger.info("Музыка тоқтатылды")
         return "Музыка тоқтатылды."
 
     def _pause(self) -> str:
-        if self._mpv_process:
-            self._mpv_process.send_signal(__import__("signal").SIGSTOP)
-            logger.info("mpv кідіртілді")
-        elif self._initialized:
+        if self._initialized:
             pygame.mixer.music.pause()
+        logger.info("Музыка кідіртілді")
         return "Музыка кідіртілді."
 
     def _resume(self) -> str:
-        if self._mpv_process:
-            self._mpv_process.send_signal(__import__("signal").SIGCONT)
-            logger.info("mpv жалғастырылды")
-        elif self._initialized:
+        if self._initialized:
             pygame.mixer.music.unpause()
+        logger.info("Музыка жалғастырылды")
         return "Музыка жалғастырылды."
