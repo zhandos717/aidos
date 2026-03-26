@@ -22,11 +22,11 @@
 
 | Компонент | Технология |
 |---|---|
-| STT | `aismlv/wav2vec2-large-xlsr-kazakh` (HuggingFace) |
-| TTS | Piper `kk_KZ-issai-medium` (офлайн) / edge-tts (fallback) |
-| AI | Qwen3.5:4b via Ollama |
+| Дауыс тану (STT) | `aismlv/wav2vec2-large-xlsr-kazakh` (HuggingFace) |
+| Дауыс синтезі (TTS) | Piper `kk_KZ-issai-medium` (офлайн) / edge-tts (резерв) |
+| AI мозгы | Qwen3.5:4b via Ollama |
 | Музыка | yt-dlp + YouTube |
-| Роутер | Keyword + AI hybrid |
+| Маршрутизатор | Кілт сөздер + AI гибриді |
 
 ---
 
@@ -50,15 +50,15 @@ make install
 
 # 3. .env файлын толтыру
 cp .env.example .env
-# .env файлын ашып WEATHER_API_KEY қосыңыз (openweathermap.org — тегін)
+# .env файлын ашып WEATHER_API_KEY мәнін қосыңыз (openweathermap.org — тегін)
 
 # 4. Ollama іске қосу (бөлек терминалда)
 make ollama-start
 
-# 5. Моделді жүктеу (бір рет, ~3.4 GB)
+# 5. AI моделін жүктеу (бір рет, ~3.4 ГБ)
 make ollama-pull
 
-# 6. Piper қазақ дауысын жүктеу (офлайн TTS үшін, ~60 MB)
+# 6. Piper қазақ дауысын жүктеу (офлайн TTS үшін, ~60 МБ)
 make piper-download
 ```
 
@@ -74,11 +74,11 @@ make run-both     # мәтін кірісі + дауыс шығысы
 
 ---
 
-## AI Модель таңдау
+## AI модель таңдау
 
 ```bash
 make use-qwen      # Qwen3.5:4b — жылдам, 201 тіл (әдепкі)
-make use-sherkala  # Sherkala-8B — қазақшаға арналған
+make use-sherkala  # Sherkala-8B — қазақшаға арнайы үйретілген
 
 # Sherkala жүктеу
 make ollama-pull-sherkala
@@ -107,7 +107,9 @@ Aidos: Сау болыңыз!
 
 ---
 
-## Конфигурация
+## Баптау
+
+Барлық параметрлер `.env` файлы арқылы реттеледі:
 
 | Айнымалы | Сипаттама | Әдепкі мән |
 |---|---|---|
@@ -126,11 +128,11 @@ Aidos: Сау болыңыз!
 ```
 src/aidos/
 ├── core/
-│   ├── config.py         # конфигурация, logging
+│   ├── config.py         # баптау, логтау
 │   ├── ollama_client.py  # Qwen/Ollama клиенті
 │   ├── router.py         # ниет маршрутизаторы
 │   ├── voice.py          # STT (wav2vec2-large-xlsr-kazakh)
-│   └── tts.py            # TTS (Piper офлайн → edge-tts fallback)
+│   └── tts.py            # TTS (Piper офлайн → edge-tts резерв)
 └── agents/
     ├── time_agent.py     # уақыт
     ├── weather_agent.py  # ауа райы (OpenWeatherMap)
@@ -139,6 +141,6 @@ src/aidos/
     └── ai_agent.py       # жалпы AI сұхбат
 ```
 
-**Роутер** — гибридті: алдымен keyword матчинг, сосын AI fallback.
+**Маршрутизатор** — гибридті: алдымен кілт сөздер, табылмаса AI fallback.
 
-**TTS приоритет:** Piper (офлайн) → edge-tts kk-KZ (онлайн) → edge-tts ru-RU.
+**TTS басымдылығы:** Piper (офлайн) → edge-tts kk-KZ (онлайн) → edge-tts ru-RU.
