@@ -10,7 +10,7 @@ from rich.prompt import Prompt
 from rich.text import Text
 
 from aidos.core.config import AI_PROVIDER, OLLAMA_MODEL, OPENROUTER_MODEL, logger, setup_logging
-from aidos.core.ollama_client import OllamaClient
+from aidos.core.ai_factory import create_ai_client
 from aidos.core.router import Intent, IntentRouter
 from aidos.agents.time_agent import TimeAgent
 from aidos.agents.weather_agent import WeatherAgent
@@ -165,29 +165,18 @@ def main() -> None:
         console.print(f"[bold cyan]Aidos:[/bold cyan] {text}")
         tts.speak(text)
 
-    # AI провайдерді таңдау
-    if AI_PROVIDER == "openrouter":
-        from aidos.core.openrouter_client import OpenRouterClient
-        try:
-            ai_client = OpenRouterClient()
-            if ai_client.is_available():
-                console.print(f"[green]✓ OpenRouter қосылды, модель: {OPENROUTER_MODEL}[/green]")
-            else:
-                console.print("[yellow]⚠ OpenRouter қол жетімсіз. AI жауаптары жұмыс істемейді.[/yellow]")
-        except ValueError as exc:
-            console.print(f"[red]✗ OpenRouter қатесі: {exc}[/red]")
-            sys.exit(1)
-        active_model = OPENROUTER_MODEL
+    # AI провайдерді таңдау (Strategy паттерн)
+    try:
+        ai_client = create_ai_client()
+    except ValueError as exc:
+        console.print(f"[red]✗ AI клиент қатесі: {exc}[/red]")
+        sys.exit(1)
+
+    active_model = OPENROUTER_MODEL if AI_PROVIDER == "openrouter" else OLLAMA_MODEL
+    if ai_client.is_available():
+        console.print(f"[green]✓ {AI_PROVIDER} қосылды, модель: {active_model}[/green]")
     else:
-        ai_client = OllamaClient()
-        if not ai_client.is_available():
-            console.print(
-                "[yellow]⚠ Ollama қосылмаған. AI жауаптары жұмыс істемейді.\n"
-                "  Ollama орнату: https://ollama.com[/yellow]"
-            )
-        else:
-            console.print(f"[green]✓ Ollama қосылды, модель: {OLLAMA_MODEL}[/green]")
-        active_model = OLLAMA_MODEL
+        console.print(f"[yellow]⚠ {AI_PROVIDER} қол жетімсіз. AI жауаптары жұмыс істемейді.[/yellow]")
 
     router = _build_router(ai_client, tts_callback)
     _log.info("Aidos іске қосылды, режим=%s, провайдер=%s, модель=%s",
