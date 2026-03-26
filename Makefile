@@ -3,7 +3,7 @@ VENV := .venv
 PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 
-.PHONY: help install run run-voice run-both ollama-start ollama-pull ollama-pull-sherkala use-qwen use-sherkala piper-download clean
+.PHONY: help install run run-voice run-both ollama-start ollama-pull ollama-pull-sherkala use-qwen use-sherkala use-openrouter piper-download clean
 
 help:
 	@echo "Aidos — қазақ AI көмекші"
@@ -17,6 +17,7 @@ help:
 	@echo "  make ollama-pull-sherkala — Sherkala-8B жүктеу (қазақша)"
 	@echo "  make use-qwen             — Qwen3.5:4b-ге ауысу"
 	@echo "  make use-sherkala         — Sherkala-8B-ге ауысу"
+	@echo "  make use-openrouter       — OpenRouter API-ге ауысу"
 	@echo "  make piper-download       — Piper қазақ дауысын жүктеу"
 	@echo "  make clean                — venv тазалау"
 
@@ -46,13 +47,21 @@ ollama-pull-sherkala:
 	ollama pull hf.co/inceptionai/Llama-3.1-Sherkala-8B-Chat
 
 use-qwen:
+	@[ -f .env ] || cp .env.example .env
 	@sed -i '' 's|^OLLAMA_MODEL=.*|OLLAMA_MODEL=qwen3.5:4b|' .env
+	@sed -i '' 's|^AI_PROVIDER=.*|AI_PROVIDER=ollama|' .env
 	@echo "✓ Модель: qwen3.5:4b"
 
 use-sherkala:
 	@[ -f .env ] || cp .env.example .env
 	@sed -i '' 's|^OLLAMA_MODEL=.*|OLLAMA_MODEL=hf.co/inceptionai/Llama-3.1-Sherkala-8B-Chat|' .env
+	@sed -i '' 's|^AI_PROVIDER=.*|AI_PROVIDER=ollama|' .env
 	@echo "✓ Модель: Sherkala-8B"
+
+use-openrouter:
+	@[ -f .env ] || cp .env.example .env
+	@sed -i '' 's|^AI_PROVIDER=.*|AI_PROVIDER=openrouter|' .env
+	@echo "✓ Провайдер: OpenRouter (OPENROUTER_API_KEY .env файлында болуы керек)"
 
 piper-download:
 	@mkdir -p ~/.aidos/piper

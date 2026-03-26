@@ -22,9 +22,16 @@ def setup_logging() -> logging.Logger:
 
 logger = setup_logging()
 
+# AI провайдер: "ollama" немесе "openrouter"
+AI_PROVIDER: str = os.getenv("AI_PROVIDER", "ollama")
+
 # Ollama
 OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen3.5:4b")
+
+# OpenRouter
+OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "qwen/qwen3-235b-a22b")
 
 # Ауа райы
 WEATHER_API_KEY: str = os.getenv("WEATHER_API_KEY", "")

@@ -9,7 +9,7 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.text import Text
 
-from aidos.core.config import OLLAMA_MODEL, logger, setup_logging
+from aidos.core.config import AI_PROVIDER, OLLAMA_MODEL, OPENROUTER_MODEL, logger, setup_logging
 from aidos.core.ollama_client import OllamaClient
 from aidos.core.router import Intent, IntentRouter
 from aidos.agents.time_agent import TimeAgent
@@ -33,13 +33,13 @@ def _print_banner() -> None:
     console.print(Panel(banner, title="[bold cyan]Aidos[/bold cyan]", border_style="cyan"))
 
 
-def _build_router(ollama: OllamaClient, tts_callback) -> IntentRouter:
+def _build_router(ai_client, tts_callback) -> IntentRouter:
     router = IntentRouter()
     router.register(Intent.TIME, TimeAgent())
     router.register(Intent.WEATHER, WeatherAgent())
     router.register(Intent.MUSIC, MusicAgent())
     router.register(Intent.REMINDER, ReminderAgent(tts_callback=tts_callback))
-    router.register(Intent.AI, AIAgent(client=ollama))
+    router.register(Intent.AI, AIAgent(client=ai_client))
     _log.info("Барлық агенттер тіркелді")
     return router
 
@@ -165,20 +165,34 @@ def main() -> None:
         console.print(f"[bold cyan]Aidos:[/bold cyan] {text}")
         tts.speak(text)
 
-    # Ollama тексеру
-    ollama = OllamaClient()
-    if not ollama.is_available():
-        console.print(
-            "[yellow]⚠ Ollama қосылмаған. AI жауаптары жұмыс істемейді.\n"
-            "  Ollama орнату: https://ollama.com[/yellow]"
-        )
+    # AI провайдерді таңдау
+    if AI_PROVIDER == "openrouter":
+        from aidos.core.openrouter_client import OpenRouterClient
+        try:
+            ai_client = OpenRouterClient()
+            if ai_client.is_available():
+                console.print(f"[green]✓ OpenRouter қосылды, модель: {OPENROUTER_MODEL}[/green]")
+            else:
+                console.print("[yellow]⚠ OpenRouter қол жетімсіз. AI жауаптары жұмыс істемейді.[/yellow]")
+        except ValueError as exc:
+            console.print(f"[red]✗ OpenRouter қатесі: {exc}[/red]")
+            sys.exit(1)
+        active_model = OPENROUTER_MODEL
     else:
-        console.print(f"[green]✓ Ollama қосылды, модель: {OLLAMA_MODEL}[/green]")
+        ai_client = OllamaClient()
+        if not ai_client.is_available():
+            console.print(
+                "[yellow]⚠ Ollama қосылмаған. AI жауаптары жұмыс істемейді.\n"
+                "  Ollama орнату: https://ollama.com[/yellow]"
+            )
+        else:
+            console.print(f"[green]✓ Ollama қосылды, модель: {OLLAMA_MODEL}[/green]")
+        active_model = OLLAMA_MODEL
 
-    router = _build_router(ollama, tts_callback)
-    _log.info("Aidos іске қосылды, режим=%s, модель=%s",
+    router = _build_router(ai_client, tts_callback)
+    _log.info("Aidos іске қосылды, режим=%s, провайдер=%s, модель=%s",
                "voice" if args.voice else ("both" if args.both else "text"),
-               OLLAMA_MODEL)
+               AI_PROVIDER, active_model)
 
     try:
         if args.voice:
