@@ -5,7 +5,6 @@ import logging
 import re
 import threading
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Callable
 
 from aidos.core.config import DATA_DIR
@@ -137,7 +136,7 @@ class ReminderAgent:
             return "Уақытты түсіне алмадым. Мысалы: '5 минуттан кейін еске сал' немесе 'сағат 15:00-де еске сал'."
 
         message = _extract_message(query)
-        reminder_id = self._schedule(delay, message)
+        self._schedule(delay, message)
 
         total_seconds = int(delay.total_seconds())
         if total_seconds < 3600:

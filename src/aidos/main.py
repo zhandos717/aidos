@@ -9,7 +9,7 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.text import Text
 
-from aidos.core.config import AI_PROVIDER, OLLAMA_MODEL, OPENROUTER_MODEL, logger, setup_logging
+from aidos.core.config import AI_PROVIDER, OLLAMA_MODEL, OPENROUTER_MODEL
 from aidos.core.ai_factory import create_ai_client
 from aidos.core.router import Intent, IntentRouter
 from aidos.agents.time_agent import TimeAgent

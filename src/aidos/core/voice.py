@@ -29,7 +29,6 @@ class VoiceInput:
         if self._model is not None:
             return
         logger.info("Казақ STT моделі жүктелуде: %s", _MODEL_ID)
-        import torch
         from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 
         self._processor = Wav2Vec2Processor.from_pretrained(_MODEL_ID)

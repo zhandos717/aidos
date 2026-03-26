@@ -1,7 +1,6 @@
 """Ollama + Qwen клиенті."""
 
 import logging
-from typing import Generator
 
 import ollama
 
