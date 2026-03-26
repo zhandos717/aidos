@@ -75,13 +75,8 @@ def _download_audio(video_id: str, output_path: Path) -> bool:
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
-        "format": "bestaudio[ext=m4a]/bestaudio/best",
-        "outtmpl": str(output_path.with_suffix("")),
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "128",
-        }],
+        "format": "bestaudio[ext=webm]/bestaudio[ext=ogg]/bestaudio",
+        "outtmpl": str(output_path),
     }
 
     logger.info("Аудио жүктелуде: %s", url)
@@ -148,17 +143,17 @@ class MusicAgent:
         # Temp файлға жүктеп pygame-мен ойнату
         import tempfile
         tmp_dir = Path(tempfile.mkdtemp())
-        tmp_file = tmp_dir / "audio.mp3"
+        tmp_file = tmp_dir / "audio"
 
         if not _download_audio(video_id, tmp_file):
             return f"'{title}' жүктеу мүмкін болмады."
 
-        # Нақты mp3 файлды табу (yt-dlp extension қосуы мүмкін)
-        mp3_files = list(tmp_dir.glob("*.mp3"))
-        if not mp3_files:
+        # Жүктелген файлды табу
+        audio_files = [f for f in tmp_dir.iterdir() if f.is_file()]
+        if not audio_files:
             return f"'{title}' аудио файл табылмады."
 
-        actual_file = mp3_files[0]
+        actual_file = audio_files[0]
         self._tmp_file = actual_file
 
         if not self._ensure_pygame():

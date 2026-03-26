@@ -26,7 +26,6 @@ install:
 	$(PIP) install -e . -q
 	@echo "✓ Тәуелділіктер орнатылды"
 	@[ -f .env ] || (cp .env.example .env && echo "✓ .env файлы жасалды — WEATHER_API_KEY қосыңыз")
-	@which ffmpeg > /dev/null 2>&1 || echo "⚠ ffmpeg орнатылмаған: brew install ffmpeg"
 
 run:
 	$(PYTHON) -m aidos.main
