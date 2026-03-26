@@ -69,6 +69,7 @@ class ReminderAgent:
     def __init__(self, tts_callback: Callable[[str], None] | None = None) -> None:
         self._tts_callback = tts_callback
         self._reminders: list[dict] = []
+        self._lock = threading.Lock()
         self._load()
         logger.debug("ReminderAgent инициализацияланды, %d еске салғыш жүктелді", len(self._reminders))
 
@@ -84,8 +85,9 @@ class ReminderAgent:
 
     def _save(self) -> None:
         try:
-            with open(_REMINDERS_FILE, "w") as f:
-                json.dump(self._reminders, f, ensure_ascii=False, indent=2)
+            with self._lock:
+                with open(_REMINDERS_FILE, "w") as f:
+                    json.dump(self._reminders, f, ensure_ascii=False, indent=2)
             logger.debug("Еске салғыштар сақталды: %s", _REMINDERS_FILE)
         except Exception as exc:
             logger.error("Еске салғыштарды сақтау қатесі: %s", exc)
@@ -98,8 +100,8 @@ class ReminderAgent:
         else:
             print(f"\n⏰ {text}")
 
-        # Орындалған еске салғышты тізімнен алу
-        self._reminders = [r for r in self._reminders if r.get("id") != reminder_id]
+        with self._lock:
+            self._reminders = [r for r in self._reminders if r.get("id") != reminder_id]
         self._save()
 
     def _schedule(self, delay: timedelta, message: str) -> str:
@@ -107,11 +109,12 @@ class ReminderAgent:
         reminder_id = str(uuid.uuid4())[:8]
         fire_time = datetime.now() + delay
 
-        self._reminders.append({
-            "id": reminder_id,
-            "message": message,
-            "fire_at": fire_time.isoformat(),
-        })
+        with self._lock:
+            self._reminders.append({
+                "id": reminder_id,
+                "message": message,
+                "fire_at": fire_time.isoformat(),
+            })
         self._save()
 
         timer = threading.Timer(delay.total_seconds(), self._fire, args=(message, reminder_id))
