@@ -9,6 +9,7 @@ dependencies = [
     "edge-tts>=6.1.9",
     "piper-tts>=1.4.0",
     "pygame>=2.6.0",
+    "yt-dlp>=2024.1.0",
     "requests>=2.32.0",
     "schedule>=1.2.0",
     "rich>=13.7.0",
