@@ -36,7 +36,7 @@ ollama-start:
 	ollama serve &
 
 ollama-pull:
-	ollama pull qwen2.5:7b
+	ollama pull qwen3.5:4b
 
 clean:
 	rm -rf $(VENV)
