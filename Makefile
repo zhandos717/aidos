@@ -3,18 +3,21 @@ VENV := .venv
 PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 
-.PHONY: help install run run-voice run-both ollama-start ollama-pull clean
+.PHONY: help install run run-voice run-both ollama-start ollama-pull ollama-pull-sherkala use-qwen use-sherkala clean
 
 help:
 	@echo "Aidos — қазақ AI көмекші"
 	@echo ""
-	@echo "  make install      — тәуелділіктерді орнату"
-	@echo "  make run          — мәтін режимінде іске қосу"
-	@echo "  make run-voice    — дауыс режимінде іске қосу"
-	@echo "  make run-both     — аралас режимде іске қосу"
-	@echo "  make ollama-start — Ollama серверін іске қосу"
-	@echo "  make ollama-pull  — Qwen моделін жүктеу"
-	@echo "  make clean        — venv тазалау"
+	@echo "  make install              — тәуелділіктерді орнату"
+	@echo "  make run                  — мәтін режимінде іске қосу"
+	@echo "  make run-voice            — дауыс режимінде іске қосу"
+	@echo "  make run-both             — аралас режимде іске қосу"
+	@echo "  make ollama-start         — Ollama серверін іске қосу"
+	@echo "  make ollama-pull          — Qwen3.5:4b жүктеу (әдепкі)"
+	@echo "  make ollama-pull-sherkala — Sherkala-8B жүктеу (қазақша)"
+	@echo "  make use-qwen             — Qwen3.5:4b-ге ауысу"
+	@echo "  make use-sherkala         — Sherkala-8B-ге ауысу"
+	@echo "  make clean                — venv тазалау"
 
 install:
 	python3 -m venv $(VENV)
@@ -37,6 +40,18 @@ ollama-start:
 
 ollama-pull:
 	ollama pull qwen3.5:4b
+
+ollama-pull-sherkala:
+	ollama pull hf.co/inceptionai/Llama-3.1-Sherkala-8B-Chat
+
+use-qwen:
+	@sed -i '' 's|^OLLAMA_MODEL=.*|OLLAMA_MODEL=qwen3.5:4b|' .env
+	@echo "✓ Модель: qwen3.5:4b"
+
+use-sherkala:
+	@[ -f .env ] || cp .env.example .env
+	@sed -i '' 's|^OLLAMA_MODEL=.*|OLLAMA_MODEL=hf.co/inceptionai/Llama-3.1-Sherkala-8B-Chat|' .env
+	@echo "✓ Модель: Sherkala-8B"
 
 clean:
 	rm -rf $(VENV)
