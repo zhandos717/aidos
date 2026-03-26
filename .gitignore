@@ -10,3 +10,8 @@ build/
 ~/.aidos/
 *.mp3
 *.wav
+.ai-factory
+.claude
+.venv
+.idea
+.ai-factory.json
