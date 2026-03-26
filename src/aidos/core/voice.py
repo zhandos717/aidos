@@ -1,8 +1,6 @@
-"""Дауыс тану модулі — Whisper арқылы STT."""
+"""Дауыс тану модулі — wav2vec2-large-xlsr-kazakh арқылы STT."""
 
 import logging
-import tempfile
-from pathlib import Path
 
 import numpy as np
 import sounddevice as sd
@@ -12,7 +10,7 @@ logger = logging.getLogger("aidos.voice")
 _SAMPLE_RATE = 16000
 _RECORD_SECONDS = 5
 _SILENCE_THRESHOLD = 0.01
-_SILENCE_DURATION = 1.5  # секунд
+_MODEL_ID = "aismlv/wav2vec2-large-xlsr-kazakh"
 
 
 def _is_silent(audio: np.ndarray) -> bool:
@@ -24,17 +22,23 @@ def _is_silent(audio: np.ndarray) -> bool:
 class VoiceInput:
     def __init__(self) -> None:
         self._model = None
-        logger.debug("VoiceInput инициализацияланды")
+        self._processor = None
+        logger.debug("VoiceInput инициализацияланды, модель=%s", _MODEL_ID)
 
     def _load_model(self) -> None:
-        if self._model is None:
-            logger.info("Whisper моделі жүктелуде...")
-            import whisper
-            self._model = whisper.load_model("base")
-            logger.info("Whisper моделі жүктелді: base")
+        if self._model is not None:
+            return
+        logger.info("Казақ STT моделі жүктелуде: %s", _MODEL_ID)
+        import torch
+        from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
+
+        self._processor = Wav2Vec2Processor.from_pretrained(_MODEL_ID)
+        self._model = Wav2Vec2ForCTC.from_pretrained(_MODEL_ID)
+        self._model.eval()
+        logger.info("Казақ STT моделі жүктелді")
 
     def listen(self) -> str | None:
-        """Микрофоннан аудио жазып, мәтінге аудару."""
+        """Микрофоннан аудио жазып, қазақ мәтінге аудару."""
         logger.info("Тыңдау басталды (%d сек)", _RECORD_SECONDS)
 
         try:
@@ -58,17 +62,25 @@ class VoiceInput:
         self._load_model()
 
         try:
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                tmp_path = Path(tmp.name)
-            import soundfile as sf
-            sf.write(str(tmp_path), audio, _SAMPLE_RATE)
+            import torch
 
-            result = self._model.transcribe(str(tmp_path), language="kk")
-            text: str = result["text"].strip()
-            tmp_path.unlink(missing_ok=True)
+            inputs = self._processor(
+                audio,
+                sampling_rate=_SAMPLE_RATE,
+                return_tensors="pt",
+                padding=True,
+            )
+            with torch.no_grad():
+                logits = self._model(
+                    inputs.input_values,
+                    attention_mask=inputs.attention_mask,
+                ).logits
+
+            predicted_ids = torch.argmax(logits, dim=-1)
+            text: str = self._processor.batch_decode(predicted_ids)[0].strip()
 
             logger.info("Дауыс танылды: '%s'", text)
             return text if text else None
         except Exception as exc:
-            logger.error("Whisper транскрипция қатесі: %s", exc)
+            logger.error("STT транскрипция қатесі: %s", exc)
             return None
