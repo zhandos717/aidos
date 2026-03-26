@@ -6,7 +6,7 @@ PIP := $(VENV)/bin/pip
 .PHONY: help install run run-voice run-both ollama-start ollama-pull clean
 
 help:
-	@echo "Айдой — қазақ AI көмекші"
+	@echo "Aidos — қазақ AI көмекші"
 	@echo ""
 	@echo "  make install      — тәуелділіктерді орнату"
 	@echo "  make run          — мәтін режимінде іске қосу"

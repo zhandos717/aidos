@@ -56,4 +56,4 @@ class TTSEngine:
                 asyncio.run(_speak_async(text, _FALLBACK_VOICE))
             except Exception as exc2:
                 logger.error("TTS fallback та сәтсіз болды: %s", exc2)
-                print(f"[Айдой]: {text}")
+                print(f"[Aidos]: {text}")
