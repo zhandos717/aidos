@@ -1,47 +1,129 @@
-"""AI агенті — Qwen арқылы жалпы сұрақтарға жауап."""
+"""AI агенті — ReAct цикл, ұзақ мерзімді жад, инструменттер."""
+
+from __future__ import annotations
 
 import logging
-import threading
-from collections import deque
+import uuid
+from typing import TYPE_CHECKING
 
-from aidos.core.ollama_client import OllamaClient
+from aidos.core.memory import MemoryStore
+from aidos.core.tool_registry import ToolRegistry
+from aidos.core.ollama_client import SYSTEM_PROMPT
 
-logger = logging.getLogger("aidos.agent.ai")
+if TYPE_CHECKING:
+    pass
 
-_MAX_HISTORY = 10
+_log = logging.getLogger("aidos.agent.ai")
+
+_MAX_STEPS = 5   # ReAct циклының максималды қадамдары
+_MAX_HISTORY = 20  # сессиядан алынатын хабарлама саны
+
+# Пайдаланушыдан факт алатын маркерлер
+_FACT_PATTERNS: list[tuple[str, str]] = [
+    ("менің атым", "user_name"),
+    ("мен тұрамын", "user_city"),
+    ("менің қалам", "user_city"),
+    ("мен жұмыс істеймін", "user_job"),
+]
 
 
 class AIAgent:
-    def __init__(self, client: OllamaClient) -> None:
+    def __init__(
+        self,
+        client,
+        memory: MemoryStore | None = None,
+        registry: ToolRegistry | None = None,
+        session_id: str | None = None,
+    ) -> None:
         self._client = client
-        self._history: deque[dict] = deque(maxlen=_MAX_HISTORY)
-        self._lock = threading.Lock()
-        logger.debug("AIAgent инициализацияланды, max_history=%d", _MAX_HISTORY)
+        self._memory = memory or MemoryStore()
+        self._registry = registry or ToolRegistry()
+        self._session_id = session_id or str(uuid.uuid4())
+        _log.info("AIAgent іске қосылды, session=%s", self._session_id[:8])
+
+    # ── Публичный API ─────────────────────────────────────────────────────────
 
     def handle(self, query: str) -> str:
-        logger.info("AIAgent.handle шақырылды, query ұзындығы=%d", len(query))
-        logger.debug("AIAgent query='%s'", query)
+        _log.info("AIAgent.handle: '%s'", query[:80])
+        self._memory.add_message(self._session_id, "user", query)
+        self._extract_facts(query)
 
-        with self._lock:
-            self._history.append({"role": "user", "content": query})
-            messages = list(self._history)
-        logger.debug("Сөйлесу тарихы: %d хабарлама", len(messages))
+        system = self._build_system()
+        messages = self._memory.get_session(self._session_id, limit=_MAX_HISTORY)
 
-        try:
-            response = self._client.chat_with_default_system(messages)
-            with self._lock:
-                self._history.append({"role": "assistant", "content": response})
-            logger.info("AIAgent жауап алды, ұзындығы=%d таңба", len(response))
-            return response
-        except Exception as exc:
-            logger.error("AIAgent қатесі: %s", exc)
-            # Қатені тарихтан алып тастау
-            with self._lock:
-                if self._history and self._history[-1]["role"] == "user":
-                    self._history.pop()
-            return "Кешіріңіз, жауап беру мүмкін болмады. Ollama іске қосылғанын тексеріңіз."
+        response = self._react(messages, system)
+
+        self._memory.add_message(self._session_id, "assistant", response)
+        return response
+
+    def set_session(self, session_id: str) -> None:
+        """UI-дан сессияны ауыстыру."""
+        self._session_id = session_id
+        _log.debug("Сессия ауыстырылды: %s", session_id[:8])
 
     def clear_history(self) -> None:
-        with self._lock:
-            self._history.clear()
-        logger.info("Сөйлесу тарихы тазаланды")
+        """Ағымдағы сессия тарихын тазалау (жадыда сақталады)."""
+        self._session_id = str(uuid.uuid4())
+        _log.info("Жаңа сессия ашылды: %s", self._session_id[:8])
+
+    # ── ReAct цикл ────────────────────────────────────────────────────────────
+
+    def _react(self, messages: list[dict], system: str) -> str:
+        """Reason → Act → Observe → Repeat → Answer."""
+        working = list(messages)
+
+        for step in range(_MAX_STEPS):
+            try:
+                raw = self._client.chat(working, system=system)
+            except Exception as exc:
+                _log.error("LLM қатесі: %s", exc)
+                return "Кешіріңіз, жауап беру мүмкін болмады."
+
+            tool_call = self._registry.parse_tool_call(raw)
+
+            if tool_call is None:
+                # Финальды жауап
+                _log.info("ReAct аяқталды, %d қадам", step + 1)
+                return raw.strip()
+
+            tool_name, args = tool_call
+            _log.info("ReAct қадам %d: %s(%s)", step + 1, tool_name, args)
+
+            result = self._registry.execute(tool_name, args)
+
+            # Инструмент нәтижесін контекстке қосу
+            working.append({"role": "assistant", "content": raw})
+            working.append({
+                "role": "user",
+                "content": f"[Инструмент нәтижесі — {tool_name}]: {result}",
+            })
+
+        _log.warning("ReAct max қадам жетті (%d)", _MAX_STEPS)
+        return raw.strip()
+
+    # ── Жүйелік prompt ────────────────────────────────────────────────────────
+
+    def _build_system(self) -> str:
+        parts = [SYSTEM_PROMPT]
+
+        facts_ctx = self._memory.facts_as_context()
+        if facts_ctx:
+            parts.append(facts_ctx)
+
+        tools_ctx = self._registry.get_system_block()
+        if tools_ctx:
+            parts.append(tools_ctx)
+
+        return "\n\n".join(parts)
+
+    # ── Факт экстракциясы ─────────────────────────────────────────────────────
+
+    def _extract_facts(self, text: str) -> None:
+        lower = text.lower()
+        for marker, fact_key in _FACT_PATTERNS:
+            if marker in lower:
+                idx = lower.index(marker) + len(marker)
+                value = text[idx:].strip(" ,.!").split(".")[0].strip()
+                if value:
+                    self._memory.set_fact(fact_key, value)
+                    _log.debug("Факт сақталды: %s=%s", fact_key, value)

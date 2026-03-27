@@ -35,13 +35,75 @@ def _print_banner() -> None:
 
 
 def _build_router(ai_client, tts_callback) -> IntentRouter:
+    from aidos.core.memory import MemoryStore
+    from aidos.core.tool_registry import ToolRegistry
+
+    memory = MemoryStore()
+    registry = ToolRegistry()
+
+    # Агенттер
+    time_agent    = TimeAgent()
+    weather_agent = WeatherAgent()
+    music_agent   = MusicAgent()
+    reminder_agent = ReminderAgent(tts_callback=tts_callback)
+
+    # Инструменттерді тіркеу (AI ReAct цикл үшін)
+    registry.register(
+        name="get_time",
+        description="Ағымдағы уақыт пен күнді алу",
+        params={},
+        handler=lambda: time_agent.handle("уақыт"),
+    )
+    registry.register(
+        name="get_weather",
+        description="Қаладағы ауа райын алу",
+        params={"city": "қала атауы, мысалы: Астана"},
+        handler=lambda city="": weather_agent.handle(city or "ауа райы"),
+    )
+    registry.register(
+        name="play_music",
+        description="YouTube-тан музыка іздеп ойнату",
+        params={"query": "ән немесе орындаушы атауы"},
+        handler=lambda query="": music_agent.handle(f"ойна {query}"),
+    )
+    registry.register(
+        name="stop_music",
+        description="Музыканы тоқтату",
+        params={},
+        handler=lambda: music_agent.handle("тоқтат"),
+    )
+    registry.register(
+        name="set_reminder",
+        description="Еске салғыш орнату",
+        params={"text": "еске салу мәтіні", "minutes": "минут саны (сан)"},
+        handler=lambda text="", minutes=5: reminder_agent.handle(
+            f"{minutes} минуттан кейін {text} еске сал"
+        ),
+    )
+    registry.register(
+        name="remember_fact",
+        description="Пайдаланушы туралы маңызды факт есте сақтау",
+        params={"key": "факт кілті", "value": "факт мәні"},
+        handler=lambda key="", value="": (
+            memory.set_fact(key, value) or f"Есте сақталды: {key} = {value}"
+        ),
+    )
+    registry.register(
+        name="recall_fact",
+        description="Бұрын сақталған фактіні еске алу",
+        params={"key": "факт кілті"},
+        handler=lambda key="": str(memory.get_fact(key) or "Табылмады"),
+    )
+
+    ai_agent = AIAgent(client=ai_client, memory=memory, registry=registry)
+
     router = IntentRouter(ai_client=ai_client)
-    router.register(Intent.TIME, TimeAgent())
-    router.register(Intent.WEATHER, WeatherAgent())
-    router.register(Intent.MUSIC, MusicAgent())
-    router.register(Intent.REMINDER, ReminderAgent(tts_callback=tts_callback))
-    router.register(Intent.AI, AIAgent(client=ai_client))
-    _log.info("Барлық агенттер тіркелді")
+    router.register(Intent.TIME, time_agent)
+    router.register(Intent.WEATHER, weather_agent)
+    router.register(Intent.MUSIC, music_agent)
+    router.register(Intent.REMINDER, reminder_agent)
+    router.register(Intent.AI, ai_agent)
+    _log.info("Барлық агенттер мен инструменттер тіркелді: %s", registry.names)
     return router
 
 
