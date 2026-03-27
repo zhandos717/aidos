@@ -3,22 +3,36 @@ VENV := .venv
 PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 
-.PHONY: help install run run-voice run-both ollama-start ollama-pull ollama-pull-sherkala use-qwen use-sherkala use-openrouter piper-download clean
+.PHONY: help install run run-voice run-both run-ui \
+        ollama-start ollama-pull ollama-pull-sherkala \
+        use-qwen use-sherkala use-openrouter use-agentrouter \
+        piper-download lint clean
 
 help:
 	@echo "Aidos — қазақ AI көмекші"
 	@echo ""
-	@echo "  make install              — тәуелділіктерді орнату"
+	@echo "  Іске қосу:"
 	@echo "  make run                  — мәтін режимінде іске қосу"
 	@echo "  make run-voice            — дауыс режимінде іске қосу"
 	@echo "  make run-both             — аралас режимде іске қосу"
+	@echo "  make run-ui               — iOS UI графикалық интерфейс"
+	@echo ""
+	@echo "  Орнату:"
+	@echo "  make install              — тәуелділіктерді орнату"
+	@echo "  make piper-download       — Piper қазақ дауысын жүктеу (kk_KZ-issai-high)"
+	@echo ""
+	@echo "  AI провайдер:"
+	@echo "  make use-qwen             — Ollama + Qwen3.5:4b"
+	@echo "  make use-sherkala         — Ollama + Sherkala-8B (қазақша)"
+	@echo "  make use-openrouter       — OpenRouter API"
+	@echo "  make use-agentrouter      — AgentRouter + deepseek-v3.2"
+	@echo ""
+	@echo "  Ollama:"
 	@echo "  make ollama-start         — Ollama серверін іске қосу"
-	@echo "  make ollama-pull          — Qwen3.5:4b жүктеу (әдепкі)"
-	@echo "  make ollama-pull-sherkala — Sherkala-8B жүктеу (қазақша)"
-	@echo "  make use-qwen             — Qwen3.5:4b-ге ауысу"
-	@echo "  make use-sherkala         — Sherkala-8B-ге ауысу"
-	@echo "  make use-openrouter       — OpenRouter API-ге ауысу"
-	@echo "  make piper-download       — Piper қазақ дауысын жүктеу"
+	@echo "  make ollama-pull          — Qwen3.5:4b жүктеу"
+	@echo "  make ollama-pull-sherkala — Sherkala-8B жүктеу"
+	@echo ""
+	@echo "  make lint                 — ruff тексеруі"
 	@echo "  make clean                — venv тазалау"
 
 install:
@@ -26,7 +40,9 @@ install:
 	$(PIP) install --upgrade pip -q
 	$(PIP) install -e . -q
 	@echo "✓ Тәуелділіктер орнатылды"
-	@[ -f .env ] || (cp .env.example .env && echo "✓ .env файлы жасалды — WEATHER_API_KEY қосыңыз")
+	@[ -f .env ] || (cp .env.example .env && echo "✓ .env файлы жасалды — API кілттерін қосыңыз")
+
+# ── Іске қосу ─────────────────────────────────────────────────────────────────
 
 run:
 	$(PYTHON) -m aidos.main
@@ -37,6 +53,11 @@ run-voice:
 run-both:
 	$(PYTHON) -m aidos.main --both
 
+run-ui:
+	$(PYTHON) -m aidos.main --ui
+
+# ── Ollama ────────────────────────────────────────────────────────────────────
+
 ollama-start:
 	ollama serve &
 
@@ -46,31 +67,45 @@ ollama-pull:
 ollama-pull-sherkala:
 	ollama pull hf.co/inceptionai/Llama-3.1-Sherkala-8B-Chat
 
+# ── AI провайдер ──────────────────────────────────────────────────────────────
+
 use-qwen:
 	@[ -f .env ] || cp .env.example .env
-	@sed -i '' 's|^OLLAMA_MODEL=.*|OLLAMA_MODEL=qwen3.5:4b|' .env
 	@sed -i '' 's|^AI_PROVIDER=.*|AI_PROVIDER=ollama|' .env
-	@echo "✓ Модель: qwen3.5:4b"
+	@sed -i '' 's|^OLLAMA_MODEL=.*|OLLAMA_MODEL=qwen3.5:4b|' .env
+	@echo "✓ Провайдер: Ollama, модель: qwen3.5:4b"
 
 use-sherkala:
 	@[ -f .env ] || cp .env.example .env
-	@sed -i '' 's|^OLLAMA_MODEL=.*|OLLAMA_MODEL=hf.co/inceptionai/Llama-3.1-Sherkala-8B-Chat|' .env
 	@sed -i '' 's|^AI_PROVIDER=.*|AI_PROVIDER=ollama|' .env
-	@echo "✓ Модель: Sherkala-8B"
+	@sed -i '' 's|^OLLAMA_MODEL=.*|OLLAMA_MODEL=hf.co/inceptionai/Llama-3.1-Sherkala-8B-Chat|' .env
+	@echo "✓ Провайдер: Ollama, модель: Sherkala-8B"
 
 use-openrouter:
 	@[ -f .env ] || cp .env.example .env
 	@sed -i '' 's|^AI_PROVIDER=.*|AI_PROVIDER=openrouter|' .env
 	@echo "✓ Провайдер: OpenRouter (OPENROUTER_API_KEY .env файлында болуы керек)"
 
+use-agentrouter:
+	@[ -f .env ] || cp .env.example .env
+	@sed -i '' 's|^AI_PROVIDER=.*|AI_PROVIDER=agentrouter|' .env
+	@echo "✓ Провайдер: AgentRouter (AGENTROUTER_API_KEY .env файлында болуы керек)"
+
+# ── Piper ─────────────────────────────────────────────────────────────────────
+
 piper-download:
 	@mkdir -p ~/.aidos/piper
-	@echo "Piper kk_KZ-issai-medium жүктелуде..."
-	wget -q -O ~/.aidos/piper/kk_KZ-issai-medium.onnx \
-		"https://huggingface.co/rhasspy/piper-voices/resolve/main/kk/kk_KZ/issai/medium/kk_KZ-issai-medium.onnx"
-	wget -q -O ~/.aidos/piper/kk_KZ-issai-medium.onnx.json \
-		"https://huggingface.co/rhasspy/piper-voices/resolve/main/kk/kk_KZ/issai/medium/kk_KZ-issai-medium.onnx.json"
+	@echo "Piper kk_KZ-issai-high жүктелуде..."
+	wget -q -O ~/.aidos/piper/kk_KZ-issai-high.onnx \
+		"https://huggingface.co/rhasspy/piper-voices/resolve/main/kk/kk_KZ/issai/high/kk_KZ-issai-high.onnx"
+	wget -q -O ~/.aidos/piper/kk_KZ-issai-high.onnx.json \
+		"https://huggingface.co/rhasspy/piper-voices/resolve/main/kk/kk_KZ/issai/high/kk_KZ-issai-high.onnx.json"
 	@echo "✓ Piper қазақ дауысы жүктелді: ~/.aidos/piper/"
+
+# ── Прочее ────────────────────────────────────────────────────────────────────
+
+lint:
+	$(VENV)/bin/ruff check src/
 
 clean:
 	rm -rf $(VENV)
