@@ -94,6 +94,12 @@ def _build_router(ai_client, tts_callback) -> IntentRouter:
         params={"key": "факт кілті"},
         handler=lambda key="": str(memory.get_fact(key) or "Табылмады"),
     )
+    registry.register(
+        name="search_memory",
+        description="Өткен сөйлесулерден ақпарат іздеу (RAG)",
+        params={"query": "іздеу сөздері"},
+        handler=lambda query="": memory.search_as_context(query) or "Ештеңе табылмады",
+    )
 
     ai_agent = AIAgent(client=ai_client, memory=memory, registry=registry)
 

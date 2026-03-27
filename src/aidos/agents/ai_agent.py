@@ -18,6 +18,12 @@ _log = logging.getLogger("aidos.agent.ai")
 _MAX_STEPS = 5   # ReAct циклының максималды қадамдары
 _MAX_HISTORY = 20  # сессиядан алынатын хабарлама саны
 
+# RAG триггер сөздер — жадыдан іздеу керек
+_RAG_TRIGGERS = (
+    "есіңде бар ма", "айттым", "сөйлестік", "бұрын", "алдыңда",
+    "помнишь", "говорил", "раньше", "до этого", "remember",
+)
+
 # Пайдаланушыдан факт алатын маркерлер
 _FACT_PATTERNS: list[tuple[str, str]] = [
     ("менің атым", "user_name"),
@@ -48,7 +54,7 @@ class AIAgent:
         self._memory.add_message(self._session_id, "user", query)
         self._extract_facts(query)
 
-        system = self._build_system()
+        system = self._build_system(query)
         messages = self._memory.get_session(self._session_id, limit=_MAX_HISTORY)
 
         response = self._react(messages, system)
@@ -103,12 +109,19 @@ class AIAgent:
 
     # ── Жүйелік prompt ────────────────────────────────────────────────────────
 
-    def _build_system(self) -> str:
+    def _build_system(self, query: str = "") -> str:
         parts = [SYSTEM_PROMPT]
 
         facts_ctx = self._memory.facts_as_context()
         if facts_ctx:
             parts.append(facts_ctx)
+
+        # RAG: сұрауда жады триггері болса — автоматты іздеу
+        if query and any(t in query.lower() for t in _RAG_TRIGGERS):
+            rag_ctx = self._memory.search_as_context(query)
+            if rag_ctx:
+                _log.info("RAG контексті қосылды")
+                parts.append(rag_ctx)
 
         tools_ctx = self._registry.get_system_block()
         if tools_ctx:

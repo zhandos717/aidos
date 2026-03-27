@@ -43,6 +43,9 @@ class MemoryStore:
                 CREATE INDEX IF NOT EXISTS idx_episodes_session
                     ON episodes(session_id);
 
+                CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts
+                    USING fts5(content, content=episodes, content_rowid=id);
+
                 CREATE TABLE IF NOT EXISTS facts (
                     key        TEXT PRIMARY KEY,
                     value      TEXT NOT NULL,
@@ -55,9 +58,14 @@ class MemoryStore:
 
     def add_message(self, session_id: str, role: str, content: str) -> None:
         with self._lock:
-            self._conn.execute(
+            cur = self._conn.execute(
                 "INSERT INTO episodes (session_id, role, content, ts) VALUES (?, ?, ?, ?)",
                 (session_id, role, content, datetime.now().isoformat()),
+            )
+            rowid = cur.lastrowid
+            self._conn.execute(
+                "INSERT INTO episodes_fts(rowid, content) VALUES (?, ?)",
+                (rowid, content),
             )
             self._conn.commit()
 
@@ -71,13 +79,40 @@ class MemoryStore:
         return [{"role": r[0], "content": r[1]} for r in reversed(rows)]
 
     def search_episodes(self, query: str, limit: int = 5) -> list[dict]:
+        """FTS5 толық мәтінді іздеу (LIKE fallback қоса)."""
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT session_id, role, content, ts FROM episodes "
-                "WHERE content LIKE ? ORDER BY id DESC LIMIT ?",
-                (f"%{query}%", limit),
-            ).fetchall()
+            try:
+                # FTS5 іздеу — жылдам және дәл
+                rows = self._conn.execute(
+                    """
+                    SELECT e.session_id, e.role, e.content, e.ts
+                    FROM episodes_fts
+                    JOIN episodes e ON episodes_fts.rowid = e.id
+                    WHERE episodes_fts MATCH ?
+                    ORDER BY rank
+                    LIMIT ?
+                    """,
+                    (query, limit),
+                ).fetchall()
+            except Exception:
+                # FTS матч синтаксис қатесі болса → LIKE fallback
+                rows = self._conn.execute(
+                    "SELECT session_id, role, content, ts FROM episodes "
+                    "WHERE content LIKE ? ORDER BY id DESC LIMIT ?",
+                    (f"%{query}%", limit),
+                ).fetchall()
         return [{"session_id": r[0], "role": r[1], "content": r[2], "ts": r[3]} for r in rows]
+
+    def search_as_context(self, query: str, limit: int = 4) -> str:
+        """RAG: іздеу нәтижелерін LLM контекстіне айналдыру."""
+        hits = self.search_episodes(query, limit=limit)
+        if not hits:
+            return ""
+        lines = [f"[Өткен сөйлесулерден '{query}' туралы табылды:]"]
+        for h in hits:
+            role_label = "Сіз" if h["role"] == "user" else "Aidos"
+            lines.append(f"  {role_label} ({h['ts'][:10]}): {h['content'][:200]}")
+        return "\n".join(lines)
 
     # ── Semantic (фактілер) ───────────────────────────────────────────────────
 

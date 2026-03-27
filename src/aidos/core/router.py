@@ -27,13 +27,23 @@ _PATTERNS: list[tuple[re.Pattern, Intent]] = [
 
 
 class IntentRouter:
-    """Гибридті роутер: Skills → Keyword → AI fallback."""
+    """Гибридті роутер: Skills → Keyword → AI Classifier → AI fallback."""
 
     def __init__(self, ai_client=None) -> None:
         self._agents: dict[Intent, object] = {}
         self._skill_loader = SkillLoader()
         self._skill_loader.set_ai_client(ai_client)
         self._skill_loader.load_all()
+
+        self._classifier = None
+        if ai_client is not None:
+            try:
+                from aidos.core.intent_classifier import IntentClassifier
+                self._classifier = IntentClassifier(ai_client)
+                logger.info("AI Intent Classifier іске қосылды")
+            except Exception as exc:
+                logger.warning("Classifier іске қосылмады: %s", exc)
+
         logger.debug("IntentRouter инициализацияланды, skills=%d", len(self._skill_loader.skills))
 
     def register(self, intent: Intent, agent: object) -> None:
@@ -54,11 +64,15 @@ class IntentRouter:
                 logger.error("Skill '%s' қатесі: %s", skill.name, exc)
                 return f"Кешіріңіз, '{skill.name}' орындалу кезінде қате шықты."
 
-        # 2. Keyword арқылы intent анықтау
+        # 2. Keyword арқылы intent анықтау (жылдам)
         intent = self._detect_intent_by_keywords(text)
 
-        if intent is None:
-            logger.warning("Keyword арқылы ниет анықталмады, AI агентіне жіберілді")
+        # 3. Keyword матч болмаса → AI Classifier
+        if intent is None and self._classifier is not None:
+            intent = self._classifier.classify(text)
+            logger.info("AI classifier ниеті: %s", intent.value)
+        elif intent is None:
+            logger.warning("Keyword матч жоқ, AI агентіне fallback")
             intent = Intent.AI
 
         logger.info("Анықталған ниет: %s", intent.value)
