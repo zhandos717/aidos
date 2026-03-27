@@ -78,15 +78,20 @@ class ReminderAgent:
                 with open(_REMINDERS_FILE) as f:
                     self._reminders = json.load(f)
                 logger.debug("Еске салғыштар файлдан жүктелді: %s", _REMINDERS_FILE)
+            except json.JSONDecodeError as exc:
+                logger.error(
+                    "Еске салғыштар файлы бүлінген (JSON қатесі: жол %d, баған %d): %s",
+                    exc.lineno, exc.colno, exc.msg,
+                )
+                self._reminders = []
             except Exception as exc:
                 logger.error("Еске салғыштарды жүктеу қатесі: %s", exc)
                 self._reminders = []
 
     def _save(self) -> None:
         try:
-            with self._lock:
-                with open(_REMINDERS_FILE, "w") as f:
-                    json.dump(self._reminders, f, ensure_ascii=False, indent=2)
+            with open(_REMINDERS_FILE, "w") as f:
+                json.dump(self._reminders, f, ensure_ascii=False, indent=2)
             logger.debug("Еске салғыштар сақталды: %s", _REMINDERS_FILE)
         except Exception as exc:
             logger.error("Еске салғыштарды сақтау қатесі: %s", exc)
@@ -101,7 +106,7 @@ class ReminderAgent:
 
         with self._lock:
             self._reminders = [r for r in self._reminders if r.get("id") != reminder_id]
-        self._save()
+            self._save()
 
     def _schedule(self, delay: timedelta, message: str) -> str:
         import uuid

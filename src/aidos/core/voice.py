@@ -1,6 +1,7 @@
 """Дауыс тану модулі — wav2vec2-large-xlsr-kazakh арқылы STT."""
 
 import logging
+import threading
 
 import numpy as np
 import sounddevice as sd
@@ -23,18 +24,22 @@ class VoiceInput:
     def __init__(self) -> None:
         self._model = None
         self._processor = None
+        self._model_lock = threading.Lock()
         logger.debug("VoiceInput инициализацияланды, модель=%s", _MODEL_ID)
 
     def _load_model(self) -> None:
         if self._model is not None:
             return
-        logger.info("Казақ STT моделі жүктелуде: %s", _MODEL_ID)
-        from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
+        with self._model_lock:
+            if self._model is not None:
+                return
+            logger.info("Казақ STT моделі жүктелуде: %s", _MODEL_ID)
+            from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 
-        self._processor = Wav2Vec2Processor.from_pretrained(_MODEL_ID)
-        self._model = Wav2Vec2ForCTC.from_pretrained(_MODEL_ID)
-        self._model.eval()
-        logger.info("Казақ STT моделі жүктелді")
+            self._processor = Wav2Vec2Processor.from_pretrained(_MODEL_ID)
+            self._model = Wav2Vec2ForCTC.from_pretrained(_MODEL_ID)
+            self._model.eval()
+            logger.info("Казақ STT моделі жүктелді")
 
     def listen(self) -> str | None:
         """Микрофоннан аудио жазып, қазақ мәтінге аудару."""

@@ -39,9 +39,9 @@ class TimeAgent:
         hour = now.hour
         minute = now.minute
         day = now.day
-        month_kk = _MONTHS_KK[now.month]
+        month_kk = _MONTHS_KK.get(now.month, str(now.month))
         year = now.year
-        weekday_kk = _WEEKDAYS_KK[now.weekday()]
+        weekday_kk = _WEEKDAYS_KK.get(now.weekday(), str(now.weekday()))
 
         time_str = f"Қазір сағат {hour:02d}:{minute:02d}, {year} жылдың {day} {month_kk}ы, {weekday_kk}."
 

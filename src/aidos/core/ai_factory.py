@@ -18,6 +18,13 @@ def create_ai_client() -> AIProvider:
         logger.info("OpenRouterClient жасалды, модель=%s", OPENROUTER_MODEL)
         return client
 
+    if AI_PROVIDER == "agentrouter":
+        from aidos.core.agentrouter_client import AgentRouterClient
+        from aidos.core.config import AGENTROUTER_MODEL
+        client = AgentRouterClient()
+        logger.info("AgentRouterClient жасалды, модель=%s", AGENTROUTER_MODEL)
+        return client
+
     from aidos.core.ollama_client import OllamaClient
     client = OllamaClient()
     logger.info("OllamaClient жасалды, модель=%s", OLLAMA_MODEL)

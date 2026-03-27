@@ -8,7 +8,7 @@ from pathlib import Path
 
 logger = logging.getLogger("aidos.tts")
 
-_PIPER_VOICE = "kk_KZ-issai-medium"
+_PIPER_VOICE = "kk/kk_KZ/issai/high/kk_KZ-issai-high"
 _PIPER_MODELS_DIR = Path(os.getenv("PIPER_MODELS_DIR", "~/.aidos/piper")).expanduser()
 _EDGE_VOICE = "kk-KZ-AigrimNeural"
 _EDGE_FALLBACK = "ru-RU-SvetlanaNeural"
@@ -18,6 +18,7 @@ class TTSEngine:
     def __init__(self) -> None:
         self._piper_voice = None  # кешталған Piper моделі
         self._piper_model_path: Path | None = self._find_piper_model()
+        self._loop = asyncio.new_event_loop()
 
         if self._piper_model_path:
             logger.info("Piper модель табылды: %s", self._piper_model_path)
@@ -32,6 +33,9 @@ class TTSEngine:
         logger.debug("Piper модель жоқ: %s", onnx)
         return None
 
+    def _find_piper_config(self) -> Path | None:
+        return Path(str(self._piper_model_path) + ".json") if self._piper_model_path else None
+
     def _load_piper(self) -> None:
         """Piper моделін бір рет жүктеп кештеу."""
         try:
@@ -43,22 +47,23 @@ class TTSEngine:
             self._piper_voice = None
 
     def _speak_piper(self, text: str) -> None:
+        import io
+        import wave
         import numpy as np
         import sounddevice as sd
 
-        stream = sd.OutputStream(
-            samplerate=self._piper_voice.config.sample_rate,
-            channels=1,
-            dtype="int16",
-        )
-        stream.start()
-        logger.debug("Piper ойнату басталды")
-        try:
-            for audio_bytes in self._piper_voice.synthesize_stream_raw(text):
-                stream.write(np.frombuffer(audio_bytes, dtype=np.int16))
-        finally:
-            stream.stop()
-            stream.close()
+        logger.debug("Piper синтез басталды")
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wav_file:
+            self._piper_voice.synthesize_wav(text, wav_file)
+
+        buf.seek(0)
+        with wave.open(buf, "rb") as wav_file:
+            frames = wav_file.readframes(wav_file.getnframes())
+            audio = np.frombuffer(frames, dtype=np.int16)
+
+        sd.play(audio, samplerate=self._piper_voice.config.sample_rate)
+        sd.wait()
         logger.debug("Piper ойнату аяқталды")
 
     async def _speak_edge_async(self, text: str, voice: str) -> None:
@@ -68,11 +73,11 @@ class TTSEngine:
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
             tmp_path = Path(tmp.name)
 
-        communicator = edge_tts.Communicate(text, voice)
-        await communicator.save(str(tmp_path))
-        logger.debug("edge-tts аудио жасалды: %d байт", tmp_path.stat().st_size)
-
         try:
+            communicator = edge_tts.Communicate(text, voice)
+            await communicator.save(str(tmp_path))
+            logger.debug("edge-tts аудио жасалды: %d байт", tmp_path.stat().st_size)
+
             if not pygame.mixer.get_init():
                 pygame.mixer.init()
             pygame.mixer.music.load(str(tmp_path))
@@ -97,12 +102,12 @@ class TTSEngine:
 
         # 2. edge-tts (онлайн fallback)
         try:
-            asyncio.run(self._speak_edge_async(text, _EDGE_VOICE))
+            self._loop.run_until_complete(self._speak_edge_async(text, _EDGE_VOICE))
             logger.info("TTS аяқталды (edge-tts)")
         except Exception as exc:
             logger.error("edge-tts қатесі: %s", exc)
             try:
-                asyncio.run(self._speak_edge_async(text, _EDGE_FALLBACK))
+                self._loop.run_until_complete(self._speak_edge_async(text, _EDGE_FALLBACK))
             except Exception as exc2:
                 logger.error("TTS барлық жолдар сәтсіз: %s", exc2)
                 print(f"[Aidos]: {text}")

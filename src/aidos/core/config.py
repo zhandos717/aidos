@@ -22,7 +22,7 @@ def setup_logging() -> logging.Logger:
 
 logger = setup_logging()
 
-# AI провайдер: "ollama" немесе "openrouter"
+# AI провайдер: "ollama", "openrouter" немесе "agentrouter"
 AI_PROVIDER: str = os.getenv("AI_PROVIDER", "ollama")
 
 # Ollama
@@ -33,6 +33,10 @@ OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen3.5:4b")
 OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "qwen/qwen3-235b-a22b")
 
+# AgentRouter
+AGENTROUTER_API_KEY: str = os.getenv("AGENTROUTER_API_KEY", "")
+AGENTROUTER_MODEL: str = os.getenv("AGENTROUTER_MODEL", "gpt-5")
+
 # Ауа райы
 WEATHER_API_KEY: str = os.getenv("WEATHER_API_KEY", "")
 DEFAULT_CITY: str = os.getenv("DEFAULT_CITY", "Алматы")
@@ -41,5 +45,5 @@ DEFAULT_CITY: str = os.getenv("DEFAULT_CITY", "Алматы")
 MUSIC_DIR: Path = Path(os.getenv("MUSIC_DIR", "~/Music")).expanduser()
 
 # Деректер қалтасы
-DATA_DIR: Path = Path.home() / ".aidos"
+DATA_DIR: Path = Path(os.getenv("AIDOS_DATA_DIR") or (Path.home() / ".aidos"))
 DATA_DIR.mkdir(exist_ok=True)

@@ -18,7 +18,7 @@ SYSTEM_PROMPT = (
 
 class OllamaClient:
     def __init__(self) -> None:
-        self._client = ollama.Client(host=OLLAMA_BASE_URL)
+        self._client = ollama.Client(host=OLLAMA_BASE_URL, timeout=30)
         self._model = OLLAMA_MODEL
         logger.debug("OllamaClient инициализацияланды: host=%s, model=%s", OLLAMA_BASE_URL, OLLAMA_MODEL)
 

@@ -48,6 +48,7 @@ class OpenRouterClient:
             response = self._client.chat.completions.create(
                 model=self._model,
                 messages=full_messages,
+                timeout=30,
             )
             content: str = response.choices[0].message.content
             logger.info("OpenRouter жауабы алынды, ұзындығы=%d таңба", len(content))

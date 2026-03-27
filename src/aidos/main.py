@@ -9,7 +9,7 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.text import Text
 
-from aidos.core.config import AI_PROVIDER, OLLAMA_MODEL, OPENROUTER_MODEL
+from aidos.core.config import AI_PROVIDER, OLLAMA_MODEL, OPENROUTER_MODEL, AGENTROUTER_MODEL
 from aidos.core.ai_factory import create_ai_client
 from aidos.core.router import Intent, IntentRouter
 from aidos.agents.time_agent import TimeAgent
@@ -34,7 +34,7 @@ def _print_banner() -> None:
 
 
 def _build_router(ai_client, tts_callback) -> IntentRouter:
-    router = IntentRouter()
+    router = IntentRouter(ai_client=ai_client)
     router.register(Intent.TIME, TimeAgent())
     router.register(Intent.WEATHER, WeatherAgent())
     router.register(Intent.MUSIC, MusicAgent())
@@ -45,7 +45,9 @@ def _build_router(ai_client, tts_callback) -> IntentRouter:
 
 
 def _normalize_query(text: str) -> str:
-    """'Aidos,' префиксін алып тастау."""
+    """'Aidos,' префиксін алып тастау және жарамсыз таңбаларды тазалау."""
+    # Surrogate таңбаларды алып тастау
+    text = text.encode("utf-8", errors="ignore").decode("utf-8")
     prefixes = ["aidos,", "aidos"]
     lower = text.lower().strip()
     for prefix in prefixes:
@@ -153,6 +155,7 @@ def main() -> None:
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--voice", action="store_true", help="Дауыс режимі (микрофон + TTS)")
     group.add_argument("--both", action="store_true", help="Аралас режим (мәтін кірісі + TTS)")
+    group.add_argument("--ui", action="store_true", help="Графикалық интерфейс (customtkinter)")
     args = parser.parse_args()
 
     _print_banner()
@@ -172,7 +175,12 @@ def main() -> None:
         console.print(f"[red]✗ AI клиент қатесі: {exc}[/red]")
         sys.exit(1)
 
-    active_model = OPENROUTER_MODEL if AI_PROVIDER == "openrouter" else OLLAMA_MODEL
+    if AI_PROVIDER == "openrouter":
+        active_model = OPENROUTER_MODEL
+    elif AI_PROVIDER == "agentrouter":
+        active_model = AGENTROUTER_MODEL
+    else:
+        active_model = OLLAMA_MODEL
     if ai_client.is_available():
         console.print(f"[green]✓ {AI_PROVIDER} қосылды, модель: {active_model}[/green]")
     else:
@@ -184,7 +192,10 @@ def main() -> None:
                AI_PROVIDER, active_model)
 
     try:
-        if args.voice:
+        if args.ui:
+            from aidos.ui import run_ui
+            run_ui(router=router, tts=tts)
+        elif args.voice:
             run_voice_mode(router, tts)
         elif args.both:
             run_both_mode(router, tts)
