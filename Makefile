@@ -3,10 +3,10 @@ VENV := .venv
 PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 
-.PHONY: help install run run-voice run-both run-ui \
+.PHONY: help install run run-voice run-both run-ui run-wake \
         ollama-start ollama-pull ollama-pull-sherkala \
         use-qwen use-sherkala use-openrouter use-agentrouter \
-        piper-download lint clean
+        piper-download wake-install lint clean
 
 help:
 	@echo "Aidos — қазақ AI көмекші"
@@ -16,10 +16,12 @@ help:
 	@echo "  make run-voice            — дауыс режимінде іске қосу"
 	@echo "  make run-both             — аралас режимде іске қосу"
 	@echo "  make run-ui               — iOS UI графикалық интерфейс"
+	@echo "  make run-wake             — колонка режимі ('Айдос' триггері + TTS)"
 	@echo ""
 	@echo "  Орнату:"
 	@echo "  make install              — тәуелділіктерді орнату"
-	@echo "  make piper-download       — Piper қазақ дауысын жүктеу (kk_KZ-issai-high)"
+	@echo "  make piper-download       — Piper қазақ дауысын жүктеу (kk_KZ-issai-high)
+	@echo "  make wake-install         — openWakeWord орнату (жылдам триггер)""
 	@echo ""
 	@echo "  AI провайдер:"
 	@echo "  make use-qwen             — Ollama + Qwen3.5:4b"
@@ -55,6 +57,9 @@ run-both:
 
 run-ui:
 	$(PYTHON) -m aidos.main --ui
+
+run-wake:
+	$(PYTHON) -m aidos.main --wake
 
 # ── Ollama ────────────────────────────────────────────────────────────────────
 
@@ -101,6 +106,18 @@ piper-download:
 	wget -q -O ~/.aidos/piper/kk_KZ-issai-high.onnx.json \
 		"https://huggingface.co/rhasspy/piper-voices/resolve/main/kk/kk_KZ/issai/high/kk_KZ-issai-high.onnx.json"
 	@echo "✓ Piper қазақ дауысы жүктелді: ~/.aidos/piper/"
+
+# ── Wake word ─────────────────────────────────────────────────────────────────
+
+wake-install:
+	$(PIP) install openwakeword -q
+	$(PYTHON) -c "from openwakeword.model import Model; Model(inference_framework='onnx')"
+	@echo "✓ openWakeWord орнатылды"
+	@echo ""
+	@echo "  Custom 'Айдос' моделін жасау үшін:"
+	@echo "  1. pip install openwakeword[training]"
+	@echo "  2. python -m openwakeword.train --help"
+	@echo "  3. .env файлына: WAKE_WORD_MODEL=~/.aidos/aidos_wake.onnx"
 
 # ── Прочее ────────────────────────────────────────────────────────────────────
 

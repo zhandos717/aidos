@@ -44,6 +44,10 @@ DEFAULT_CITY: str = os.getenv("DEFAULT_CITY", "Алматы")
 # Музыка
 MUSIC_DIR: Path = Path(os.getenv("MUSIC_DIR", "~/Music")).expanduser()
 
+# Wake word
+_ww = os.getenv("WAKE_WORD_MODEL", "")
+WAKE_WORD_MODEL: Path | None = Path(_ww) if _ww else None
+
 # Деректер қалтасы
 DATA_DIR: Path = Path(os.getenv("AIDOS_DATA_DIR") or (Path.home() / ".aidos"))
 DATA_DIR.mkdir(exist_ok=True)

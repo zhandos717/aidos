@@ -3,6 +3,7 @@
 import argparse
 import logging
 import sys
+import threading
 
 from rich.console import Console
 from rich.panel import Panel
@@ -150,12 +151,58 @@ def run_both_mode(router: IntentRouter, tts) -> None:
             _log.error("Аралас режим қатесі: %s", exc)
 
 
+def run_wake_mode(router: IntentRouter, tts) -> None:
+    """Колонка режимі — 'Айдос' деген сөзден кейін тыңдайды."""
+    from aidos.core.voice import VoiceInput
+    from aidos.core.wake_word import WakeWordDetector
+
+    voice = VoiceInput()
+    _ready = threading.Event()
+
+    def on_wake() -> None:
+        tts.speak("Иә?")
+        console.print("[bold cyan]Aidos:[/bold cyan] Иә?")
+        _ready.set()
+
+    detector = WakeWordDetector(on_detected=on_wake)
+    detector.start()
+    console.print("[dim]🎙  'Айдос' деп айтыңыз...[/dim]")
+    _log.info("Колонка режимі іске қосылды")
+
+    try:
+        while True:
+            _ready.wait()
+            _ready.clear()
+
+            console.print("[dim]Тыңдауда...[/dim]")
+            text = voice.listen()
+            if not text:
+                continue
+
+            console.print(f"[bold cyan]Сіз:[/bold cyan] {text}")
+            query = _normalize_query(text)
+
+            if query.lower() in _EXIT_WORDS:
+                tts.speak("Сау болыңыз!")
+                break
+
+            try:
+                response = router.route(query)
+                console.print(f"[bold cyan]Aidos:[/bold cyan] {response}")
+                tts.speak(response)
+            except Exception as exc:
+                _log.error("Колонка режимі қатесі: %s", exc)
+    finally:
+        detector.stop()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Aidos — қазақ AI көмекші")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--voice", action="store_true", help="Дауыс режимі (микрофон + TTS)")
     group.add_argument("--both", action="store_true", help="Аралас режим (мәтін кірісі + TTS)")
     group.add_argument("--ui", action="store_true", help="Графикалық интерфейс (customtkinter)")
+    group.add_argument("--wake", action="store_true", help="Колонка режимі ('Айдос' триггері + TTS)")
     args = parser.parse_args()
 
     _print_banner()
@@ -195,6 +242,8 @@ def main() -> None:
         if args.ui:
             from aidos.ui import run_ui
             run_ui(router=router, tts=tts)
+        elif args.wake:
+            run_wake_mode(router, tts)
         elif args.voice:
             run_voice_mode(router, tts)
         elif args.both:

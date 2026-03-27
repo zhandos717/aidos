@@ -41,6 +41,31 @@ class VoiceInput:
             self._model.eval()
             logger.info("Казақ STT моделі жүктелді")
 
+    def transcribe(self, audio: "np.ndarray") -> str | None:
+        """Берілген numpy аудио массивін мәтінге аудару."""
+        if _is_silent(audio):
+            return None
+        self._load_model()
+        try:
+            import torch
+            inputs = self._processor(
+                audio,
+                sampling_rate=_SAMPLE_RATE,
+                return_tensors="pt",
+                padding=True,
+            )
+            with torch.no_grad():
+                logits = self._model(
+                    inputs.input_values,
+                    attention_mask=inputs.attention_mask,
+                ).logits
+            predicted_ids = torch.argmax(logits, dim=-1)
+            text: str = self._processor.batch_decode(predicted_ids)[0].strip()
+            return text if text else None
+        except Exception as exc:
+            logger.error("STT транскрипция қатесі: %s", exc)
+            return None
+
     def listen(self) -> str | None:
         """Микрофоннан аудио жазып, қазақ мәтінге аудару."""
         logger.info("Тыңдау басталды (%d сек)", _RECORD_SECONDS)
@@ -59,32 +84,9 @@ class VoiceInput:
             logger.error("Микрофон қатесі: %s", exc)
             return None
 
-        if _is_silent(audio):
-            logger.info("Тыныштық анықталды, мәтін қайтарылмады")
-            return None
-
-        self._load_model()
-
-        try:
-            import torch
-
-            inputs = self._processor(
-                audio,
-                sampling_rate=_SAMPLE_RATE,
-                return_tensors="pt",
-                padding=True,
-            )
-            with torch.no_grad():
-                logits = self._model(
-                    inputs.input_values,
-                    attention_mask=inputs.attention_mask,
-                ).logits
-
-            predicted_ids = torch.argmax(logits, dim=-1)
-            text: str = self._processor.batch_decode(predicted_ids)[0].strip()
-
+        text = self.transcribe(audio)
+        if text:
             logger.info("Дауыс танылды: '%s'", text)
-            return text if text else None
-        except Exception as exc:
-            logger.error("STT транскрипция қатесі: %s", exc)
-            return None
+        else:
+            logger.info("Тыныштық анықталды, мәтін қайтарылмады")
+        return text
