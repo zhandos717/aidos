@@ -137,12 +137,13 @@ pub struct SileroVad {
     session: Session,
     state: Vec<f32>,
     context: Vec<f32>,
+    failed: bool,
 }
 
 impl SileroVad {
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let session = Session::builder()?.commit_from_file(path)?;
-        Ok(Self { session, state: vec![0.0; 2 * 128], context: vec![0.0; CONTEXT] })
+        Ok(Self { session, state: vec![0.0; 2 * 128], context: vec![0.0; CONTEXT], failed: false })
     }
 
     fn infer(&mut self, frame: &[f32]) -> anyhow::Result<f32> {
@@ -166,7 +167,12 @@ impl SileroVad {
 impl SpeechProb for SileroVad {
     fn prob(&mut self, frame: &[f32]) -> f32 {
         self.infer(frame).unwrap_or_else(|err| {
-            tracing::warn!(%err, "silero inference failed");
+            if self.failed {
+                tracing::debug!(%err, "silero inference failed");
+            } else {
+                self.failed = true;
+                tracing::error!(%err, "silero inference failed");
+            }
             0.0
         })
     }
@@ -174,6 +180,7 @@ impl SpeechProb for SileroVad {
     fn reset(&mut self) {
         self.state.fill(0.0);
         self.context.fill(0.0);
+        self.failed = false;
     }
 }
 
@@ -269,5 +276,39 @@ mod tests {
         assert!(speech * 2 > pcm.len() / FRAME, "speech frames: {speech}");
         vad.reset();
         assert!(vad.prob(&vec![0.0; FRAME]) < 0.5);
+    }
+
+    #[test]
+    fn endpointer_is_chunk_size_invariant() {
+        let mut pcm = vec![0i16; 3000];
+        pcm.extend(vec![1000i16; 12000]);
+        pcm.extend(vec![0i16; 20000]);
+        pcm.extend(vec![-1500i16; 9000]);
+        pcm.extend(vec![0i16; 20000]);
+        let run = |size: usize| {
+            let mut ep = Endpointer::new(Loud, SegmenterParams::default());
+            pcm.chunks(size).flat_map(|c| ep.push(c)).collect::<Vec<_>>()
+        };
+        let whole = run(pcm.len());
+        assert_eq!(whole.len(), 2);
+        assert_eq!(run(1), whole);
+        assert_eq!(run(960), whole);
+    }
+
+    #[test]
+    fn silero_matches_reference_probs() {
+        const REF: [f32; 40] = [
+            0.0414, 0.0132, 0.0167, 0.0171, 0.0431, 0.0693, 0.1128, 0.6117, 0.9956, 0.9969, 0.9999, 0.9999, 1.0, 1.0, 0.9999,
+            0.9999, 1.0, 0.9999, 0.9996, 0.9959, 0.9484, 0.8961, 0.8437, 0.569, 0.9942, 0.9992, 0.9999, 0.9999, 1.0, 1.0,
+            0.9999, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+        ];
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        let mut vad = SileroVad::load(&Path::new(manifest).join("models/silero_vad.onnx")).unwrap();
+        let mut reader = hound::WavReader::open(Path::new(manifest).join("tests/fixtures/speech_16k.wav")).unwrap();
+        let pcm: Vec<i16> = reader.samples::<i16>().map(Result::unwrap).collect();
+        for (i, (frame, want)) in pcm.chunks_exact(FRAME).zip(REF).enumerate() {
+            let got = vad.prob(&i16_to_f32(frame));
+            assert!((got - want).abs() < 1e-3, "frame {i}: got {got}, want {want}");
+        }
     }
 }
