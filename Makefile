@@ -6,7 +6,8 @@ PIP := $(VENV)/bin/pip
 .PHONY: help install run run-voice run-both run-ui run-wake brain \
         ollama-start ollama-pull ollama-pull-sherkala \
         use-qwen use-sherkala use-openrouter use-agentrouter \
-        piper-download wake-install proto test lint clean
+        piper-download wake-install proto test lint clean \
+        gateway gateway-test
 
 help:
 	@echo "Aidos — қазақ AI көмекші"
@@ -38,6 +39,8 @@ help:
 	@echo "  make test                 — pytest тесттері"
 	@echo "  make lint                 — ruff тексеруі"
 	@echo "  make proto                — gRPC кодын генерациялау (Python)"
+	@echo "  make gateway              — WebSocket қалықтарының Rust шлюзі"
+	@echo "  make gateway-test         — Rust шлюзінің тесттері"
 	@echo "  make clean                — venv тазалау"
 
 install:
@@ -66,6 +69,14 @@ run-wake:
 
 brain:
 	$(PYTHON) -m aidos.main --brain
+
+# ── Rust (Gateway) ────────────────────────────────────────────────────────────
+
+gateway:
+	cd gateway && cargo run --release
+
+gateway-test:
+	cd gateway && cargo test
 
 # ── Ollama ────────────────────────────────────────────────────────────────────
 
