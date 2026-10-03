@@ -27,7 +27,14 @@ pub struct SegmenterParams {
 
 impl Default for SegmenterParams {
     fn default() -> Self {
-        Self { threshold: 0.5, frame_ms: 32, min_speech_ms: 250, end_silence_ms: 1000, max_utterance_ms: 12000, pre_roll_ms: 300 }
+        Self {
+            threshold: 0.5,
+            frame_ms: 32,
+            min_speech_ms: 250,
+            end_silence_ms: 1000,
+            max_utterance_ms: 12000,
+            pre_roll_ms: 300,
+        }
     }
 }
 
@@ -109,7 +116,11 @@ pub struct Endpointer<P: SpeechProb> {
 
 impl<P: SpeechProb> Endpointer<P> {
     pub fn new(prob: P, p: SegmenterParams) -> Self {
-        Self { prob, seg: Segmenter::new(p), pending: Vec::new() }
+        Self {
+            prob,
+            seg: Segmenter::new(p),
+            pending: Vec::new(),
+        }
     }
 
     pub fn push(&mut self, pcm: &[i16]) -> Vec<Vec<i16>> {
@@ -143,7 +154,12 @@ pub struct SileroVad {
 impl SileroVad {
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let session = Session::builder()?.commit_from_file(path)?;
-        Ok(Self { session, state: vec![0.0; 2 * 128], context: vec![0.0; CONTEXT], failed: false })
+        Ok(Self {
+            session,
+            state: vec![0.0; 2 * 128],
+            context: vec![0.0; CONTEXT],
+            failed: false,
+        })
     }
 
     fn infer(&mut self, frame: &[f32]) -> anyhow::Result<f32> {
@@ -159,7 +175,8 @@ impl SileroVad {
         let (_, state) = outputs["stateN"].try_extract_tensor::<f32>()?;
         let prob = prob[0];
         self.state.copy_from_slice(state);
-        self.context.copy_from_slice(&input[input.len() - CONTEXT..]);
+        self.context
+            .copy_from_slice(&input[input.len() - CONTEXT..]);
         Ok(prob)
     }
 }
@@ -195,7 +212,11 @@ mod tests {
     }
 
     fn feed(seg: &mut Segmenter, probs: &[f32]) -> Vec<Vec<i16>> {
-        probs.iter().enumerate().filter_map(|(i, &p)| seg.feed(&vec![i as i16; FRAME], p)).collect()
+        probs
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &p)| seg.feed(&vec![i as i16; FRAME], p))
+            .collect()
     }
 
     fn params(f: impl FnOnce(&mut SegmenterParams)) -> SegmenterParams {
@@ -205,7 +226,10 @@ mod tests {
     }
 
     fn probs(parts: &[(f32, usize)]) -> Vec<f32> {
-        parts.iter().flat_map(|&(p, n)| std::iter::repeat_n(p, n)).collect()
+        parts
+            .iter()
+            .flat_map(|&(p, n)| std::iter::repeat_n(p, n))
+            .collect()
     }
 
     #[test]
@@ -218,7 +242,10 @@ mod tests {
     #[test]
     fn utterance_ends_after_silence() {
         let mut seg = Segmenter::new(params(|p| p.pre_roll_ms = 96));
-        let out = feed(&mut seg, &probs(&[(0.0, 10), (0.9, ms(800)), (0.1, ms(1000))]));
+        let out = feed(
+            &mut seg,
+            &probs(&[(0.0, 10), (0.9, ms(800)), (0.1, ms(1000))]),
+        );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].len(), (ms(96) + ms(800) + ms(1000)) * FRAME);
         assert!(!seg.triggered());
@@ -233,7 +260,15 @@ mod tests {
     #[test]
     fn short_pause_does_not_split() {
         let mut seg = Segmenter::new(SegmenterParams::default());
-        let out = feed(&mut seg, &probs(&[(0.9, ms(500)), (0.0, ms(500)), (0.9, ms(500)), (0.0, ms(1000))]));
+        let out = feed(
+            &mut seg,
+            &probs(&[
+                (0.9, ms(500)),
+                (0.0, ms(500)),
+                (0.9, ms(500)),
+                (0.0, ms(1000)),
+            ]),
+        );
         assert_eq!(out.len(), 1);
     }
 
@@ -248,7 +283,11 @@ mod tests {
     struct Loud;
     impl SpeechProb for Loud {
         fn prob(&mut self, frame: &[f32]) -> f32 {
-            if frame.iter().any(|s| s.abs() > 0.01) { 1.0 } else { 0.0 }
+            if frame.iter().any(|s| s.abs() > 0.01) {
+                1.0
+            } else {
+                0.0
+            }
         }
         fn reset(&mut self) {}
     }
@@ -270,9 +309,14 @@ mod tests {
     fn silero_detects_speech_in_fixture() {
         let manifest = env!("CARGO_MANIFEST_DIR");
         let mut vad = SileroVad::load(&Path::new(manifest).join("models/silero_vad.onnx")).unwrap();
-        let mut reader = hound::WavReader::open(Path::new(manifest).join("tests/fixtures/speech_16k.wav")).unwrap();
+        let mut reader =
+            hound::WavReader::open(Path::new(manifest).join("tests/fixtures/speech_16k.wav"))
+                .unwrap();
         let pcm: Vec<i16> = reader.samples::<i16>().map(Result::unwrap).collect();
-        let speech = pcm.chunks_exact(FRAME).filter(|f| vad.prob(&i16_to_f32(f)) > 0.5).count();
+        let speech = pcm
+            .chunks_exact(FRAME)
+            .filter(|f| vad.prob(&i16_to_f32(f)) > 0.5)
+            .count();
         assert!(speech * 2 > pcm.len() / FRAME, "speech frames: {speech}");
         vad.reset();
         assert!(vad.prob(&vec![0.0; FRAME]) < 0.5);
@@ -287,7 +331,9 @@ mod tests {
         pcm.extend(vec![0i16; 20000]);
         let run = |size: usize| {
             let mut ep = Endpointer::new(Loud, SegmenterParams::default());
-            pcm.chunks(size).flat_map(|c| ep.push(c)).collect::<Vec<_>>()
+            pcm.chunks(size)
+                .flat_map(|c| ep.push(c))
+                .collect::<Vec<_>>()
         };
         let whole = run(pcm.len());
         assert_eq!(whole.len(), 2);
@@ -298,17 +344,23 @@ mod tests {
     #[test]
     fn silero_matches_reference_probs() {
         const REF: [f32; 40] = [
-            0.0414, 0.0132, 0.0167, 0.0171, 0.0431, 0.0693, 0.1128, 0.6117, 0.9956, 0.9969, 0.9999, 0.9999, 1.0, 1.0, 0.9999,
-            0.9999, 1.0, 0.9999, 0.9996, 0.9959, 0.9484, 0.8961, 0.8437, 0.569, 0.9942, 0.9992, 0.9999, 0.9999, 1.0, 1.0,
-            0.9999, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            0.0414, 0.0132, 0.0167, 0.0171, 0.0431, 0.0693, 0.1128, 0.6117, 0.9956, 0.9969, 0.9999,
+            0.9999, 1.0, 1.0, 0.9999, 0.9999, 1.0, 0.9999, 0.9996, 0.9959, 0.9484, 0.8961, 0.8437,
+            0.569, 0.9942, 0.9992, 0.9999, 0.9999, 1.0, 1.0, 0.9999, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0,
         ];
         let manifest = env!("CARGO_MANIFEST_DIR");
         let mut vad = SileroVad::load(&Path::new(manifest).join("models/silero_vad.onnx")).unwrap();
-        let mut reader = hound::WavReader::open(Path::new(manifest).join("tests/fixtures/speech_16k.wav")).unwrap();
+        let mut reader =
+            hound::WavReader::open(Path::new(manifest).join("tests/fixtures/speech_16k.wav"))
+                .unwrap();
         let pcm: Vec<i16> = reader.samples::<i16>().map(Result::unwrap).collect();
         for (i, (frame, want)) in pcm.chunks_exact(FRAME).zip(REF).enumerate() {
             let got = vad.prob(&i16_to_f32(frame));
-            assert!((got - want).abs() < 1e-3, "frame {i}: got {got}, want {want}");
+            assert!(
+                (got - want).abs() < 1e-3,
+                "frame {i}: got {got}, want {want}"
+            );
         }
     }
 }

@@ -22,7 +22,11 @@ pub struct DownEncoder(opus::Encoder);
 
 impl DownEncoder {
     pub fn new() -> anyhow::Result<Self> {
-        Ok(Self(opus::Encoder::new(DOWN_RATE, opus::Channels::Mono, opus::Application::Voip)?))
+        Ok(Self(opus::Encoder::new(
+            DOWN_RATE,
+            opus::Channels::Mono,
+            opus::Application::Voip,
+        )?))
     }
 
     pub fn encode_all(&mut self, pcm: &[i16]) -> anyhow::Result<Vec<Vec<u8>>> {
@@ -58,7 +62,10 @@ pub fn resample(pcm: &[i16], from: u32, to: u32) -> Vec<i16> {
 }
 
 pub fn pcm_from_le_bytes(bytes: &[u8]) -> Vec<i16> {
-    bytes.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect()
+    bytes
+        .chunks_exact(2)
+        .map(|b| i16::from_le_bytes([b[0], b[1]]))
+        .collect()
 }
 
 pub fn pcm_to_le_bytes(pcm: &[i16]) -> Vec<u8> {
@@ -76,13 +83,16 @@ mod tests {
     fn sine(rate: u32, ms: u32) -> Vec<i16> {
         let n = (rate * ms / 1000) as usize;
         (0..n)
-            .map(|i| ((i as f32 * 440.0 * std::f32::consts::TAU / rate as f32).sin() * 8000.0) as i16)
+            .map(|i| {
+                ((i as f32 * 440.0 * std::f32::consts::TAU / rate as f32).sin() * 8000.0) as i16
+            })
             .collect()
     }
 
     #[test]
     fn up_roundtrip_60ms() {
-        let mut enc = opus::Encoder::new(UP_RATE, opus::Channels::Mono, opus::Application::Voip).unwrap();
+        let mut enc =
+            opus::Encoder::new(UP_RATE, opus::Channels::Mono, opus::Application::Voip).unwrap();
         let mut packet = vec![0u8; 4000];
         let len = enc.encode(&sine(UP_RATE, 60), &mut packet).unwrap();
         let pcm = UpDecoder::new().unwrap().decode(&packet[..len]).unwrap();
@@ -91,7 +101,10 @@ mod tests {
 
     #[test]
     fn encode_all_pads_last_frame() {
-        let frames = DownEncoder::new().unwrap().encode_all(&sine(DOWN_RATE, 130)).unwrap();
+        let frames = DownEncoder::new()
+            .unwrap()
+            .encode_all(&sine(DOWN_RATE, 130))
+            .unwrap();
         assert_eq!(frames.len(), 3);
         assert!(frames.iter().all(|f| !f.is_empty()));
     }
