@@ -4,3 +4,4 @@ pub mod pb {
 pub mod audio;
 pub mod config;
 pub mod xiaozhi;
+pub mod vad;
