@@ -15,4 +15,5 @@ build/
 .venv
 .idea
 .ai-factory.json
-.mcp.json.superpowers/
+.mcp.json
+.superpowers/
