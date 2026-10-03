@@ -314,7 +314,11 @@ def run_brain_mode(router: IntentRouter, tts) -> None:
         console.print("[red]✗ LINK_TOKEN .env-те берілмеген[/red]")
         sys.exit(1)
     bind = os.getenv("BRAIN_BIND", "127.0.0.1:50051")
+    if tts._piper_voice is None:
+        _log.warning("Piper жүктелмеген — колонкаға дыбыс жіберілмейді")
+        console.print("[yellow]⚠ Piper жүктелмеген — колонкаға дыбыс жіберілмейді[/yellow]")
     voice = VoiceInput()
+    voice.preload()
     runner = TurnRunner(transcribe=voice.transcribe, respond=router.route, synthesize=tts.synthesize)
     console.print(f"[green]✓ Мозг тыңдауда: {bind}[/green]")
     asyncio.run(serve(BrainService(runner, token), bind))

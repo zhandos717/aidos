@@ -130,6 +130,9 @@ class VoiceInput:
             self._model.eval()
             logger.info("Казақ STT моделі жүктелді")
 
+    def preload(self) -> None:
+        self._load_model()
+
     def transcribe(self, audio: "np.ndarray") -> str | None:
         """Берілген numpy аудио массивін мәтінге аудару."""
         if _is_silent(audio):
