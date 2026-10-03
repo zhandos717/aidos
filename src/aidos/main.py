@@ -300,6 +300,26 @@ def _run_wake_with_detector(router: IntentRouter, tts, voice) -> None:
         detector.stop()
 
 
+def run_brain_mode(router: IntentRouter, tts) -> None:
+    """Шлюзге арналған gRPC мозг-сервері."""
+    import asyncio
+    import os
+
+    from aidos.brain.server import BrainService, serve
+    from aidos.brain.turn import TurnRunner
+    from aidos.core.voice import VoiceInput
+
+    token = os.getenv("LINK_TOKEN", "")
+    if not token:
+        console.print("[red]✗ LINK_TOKEN .env-те берілмеген[/red]")
+        sys.exit(1)
+    bind = os.getenv("BRAIN_BIND", "127.0.0.1:50051")
+    voice = VoiceInput()
+    runner = TurnRunner(transcribe=voice.transcribe, respond=router.route, synthesize=tts.synthesize)
+    console.print(f"[green]✓ Мозг тыңдауда: {bind}[/green]")
+    asyncio.run(serve(BrainService(runner, token), bind))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Aidos — қазақ AI көмекші")
     group = parser.add_mutually_exclusive_group()
@@ -307,6 +327,7 @@ def main() -> None:
     group.add_argument("--both", action="store_true", help="Аралас режим (мәтін кірісі + TTS)")
     group.add_argument("--ui", action="store_true", help="Графикалық интерфейс (customtkinter)")
     group.add_argument("--wake", action="store_true", help="Колонка режимі ('Айдос' триггері + TTS)")
+    group.add_argument("--brain", action="store_true", help="gRPC мозг-сервері (колонкалар шлюзы үшін)")
     args = parser.parse_args()
 
     _print_banner()
@@ -346,6 +367,8 @@ def main() -> None:
         if args.ui:
             from aidos.ui import run_ui
             run_ui(router=router, tts=tts)
+        elif args.brain:
+            run_brain_mode(router, tts)
         elif args.wake:
             run_wake_mode(router, tts)
         elif args.voice:

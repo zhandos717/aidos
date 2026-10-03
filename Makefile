@@ -3,7 +3,7 @@ VENV := .venv
 PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 
-.PHONY: help install run run-voice run-both run-ui run-wake \
+.PHONY: help install run run-voice run-both run-ui run-wake brain \
         ollama-start ollama-pull ollama-pull-sherkala \
         use-qwen use-sherkala use-openrouter use-agentrouter \
         piper-download wake-install proto test lint clean
@@ -17,6 +17,7 @@ help:
 	@echo "  make run-both             — аралас режимде іске қосу"
 	@echo "  make run-ui               — iOS UI графикалық интерфейс"
 	@echo "  make run-wake             — колонка режимі ('Айдос' триггері + TTS)"
+	@echo "  make brain                — gRPC мозг (колонка шлюзы үшін)"
 	@echo ""
 	@echo "  Орнату:"
 	@echo "  make install              — тәуелділіктерді орнату"
@@ -62,6 +63,9 @@ run-ui:
 
 run-wake:
 	$(PYTHON) -m aidos.main --wake
+
+brain:
+	$(PYTHON) -m aidos.main --brain
 
 # ── Ollama ────────────────────────────────────────────────────────────────────
 
