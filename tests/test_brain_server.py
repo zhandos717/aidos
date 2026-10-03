@@ -59,6 +59,18 @@ async def test_turn_roundtrip():
         await server.stop(None)
 
 
+async def test_initial_metadata_sent_before_any_request():
+    """tonic's `client.link(req).await` resolves only once response headers arrive."""
+    server, channel, call, outbox = await _open(BrainService(_runner(), TOKEN))
+    try:
+        await asyncio.wait_for(call.initial_metadata(), 2)
+        assert outbox.empty()
+    finally:
+        await outbox.put(None)
+        await channel.close()
+        await server.stop(None)
+
+
 async def test_wrong_token_rejected():
     server, channel, call, outbox = await _open(BrainService(_runner(), TOKEN), token="bad")
     try:
