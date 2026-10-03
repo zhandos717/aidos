@@ -43,3 +43,7 @@ asyncio_mode = "auto"
 
 [tool.ruff]
 extend-exclude = ["src/aidos/brain/gen"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/aidos/agents/music_agent.py" = ["E402"]
+"src/aidos/ui/app.py" = ["F821", "F841"]
