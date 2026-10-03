@@ -155,7 +155,14 @@ impl Session {
             }
         };
         match msg {
-            DeviceMsg::Hello { .. } => {
+            DeviceMsg::Hello { version, .. } => {
+                if version > 1 {
+                    tracing::warn!(
+                        device_id = self.device_id,
+                        version,
+                        "only protocol v1 (raw Opus) is supported"
+                    );
+                }
                 self.queue
                     .push_back(Out::Json(xiaozhi::server_hello(&self.session_id)));
                 self.link.send(state_event(&self.device_id, true));
