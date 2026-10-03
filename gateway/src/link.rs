@@ -63,7 +63,10 @@ impl LinkHandle {
     }
 
     pub fn unregister(&self, device_id: &str) {
-        self.routes.lock().unwrap().remove(device_id);
+        let mut routes = self.routes.lock().unwrap();
+        if routes.get(device_id).is_some_and(|tx| tx.is_closed()) {
+            routes.remove(device_id);
+        }
     }
 }
 
@@ -77,7 +80,13 @@ async fn run(addr: String, token: String, mut outbox: mpsc::Receiver<pb::Gateway
         if connected.swap(false, Ordering::Relaxed) {
             backoff = Duration::from_secs(1);
         }
-        while outbox.try_recv().is_ok() {}
+        loop {
+            match outbox.try_recv() {
+                Ok(_) => {}
+                Err(mpsc::error::TryRecvError::Empty) => break,
+                Err(mpsc::error::TryRecvError::Disconnected) => return,
+            }
+        }
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(Duration::from_secs(30));
     }
@@ -90,7 +99,14 @@ async fn connect_once(
     routes: &Routes,
     connected: &AtomicBool,
 ) -> anyhow::Result<()> {
-    let mut client = BrainClient::connect(addr.to_string()).await?;
+    let channel = tonic::transport::Endpoint::from_shared(addr.to_string())?
+        .connect_timeout(Duration::from_secs(5))
+        .http2_keep_alive_interval(Duration::from_secs(10))
+        .keep_alive_timeout(Duration::from_secs(5))
+        .keep_alive_while_idle(true)
+        .connect()
+        .await?;
+    let mut client = BrainClient::new(channel);
     let (tx, rx) = mpsc::channel(64);
     let mut req = Request::new(ReceiverStream::new(rx));
     req.metadata_mut().insert("authorization", format!("Bearer {token}").parse()?);
@@ -98,10 +114,16 @@ async fn connect_once(
     connected.store(true, Ordering::Relaxed);
     tracing::info!(addr, "brain link up");
 
+    let mut pending: Option<pb::GatewayEvent> = None;
     loop {
         tokio::select! {
-            out = outbox.recv() => match out {
-                Some(ev) => tx.send(ev).await?,
+            permit = tx.reserve(), if pending.is_some() => {
+                if let Some(ev) = pending.take() {
+                    permit?.send(ev);
+                }
+            }
+            out = outbox.recv(), if pending.is_none() => match out {
+                Some(ev) => pending = Some(ev),
                 None => return Ok(()),
             },
             msg = inbound.message() => match msg? {
@@ -117,7 +139,7 @@ fn route(routes: &Routes, ev: pb::BrainEvent) {
     let sender = routes.lock().unwrap().get(&device_id).cloned();
     match sender {
         Some(tx) if tx.try_send(ev).is_ok() => {}
-        _ => tracing::debug!(device_id, "dropped brain event: device not connected or slow"),
+        _ => tracing::warn!(device_id, "dropped brain event: device not connected or slow"),
     }
 }
 
@@ -190,6 +212,24 @@ mod tests {
         let ev_b = tokio::time::timeout(Duration::from_secs(3), b.recv()).await.unwrap().unwrap();
         assert_eq!((event_device_id(&ev_a), event_turn_id(&ev_a)), (Some("box-a"), Some("t1")));
         assert_eq!((event_device_id(&ev_b), event_turn_id(&ev_b)), (Some("box-b"), Some("t2")));
+    }
+
+    #[tokio::test]
+    async fn stale_unregister_keeps_newer_registration() {
+        let (out, _rx) = mpsc::channel(1);
+        let link = LinkHandle { out, routes: Arc::default(), connected: Arc::default() };
+        let rx1 = link.register("box-a");
+        drop(rx1);
+        let mut rx2 = link.register("box-a");
+        link.unregister("box-a");
+        route(&link.routes, pb::BrainEvent { kind: Some(Kind::Transcript(pb::Transcript {
+            device_id: "box-a".into(), turn_id: "t1".into(), text: "x".into(),
+        })) });
+        assert!(rx2.try_recv().is_ok());
+
+        drop(rx2);
+        link.unregister("box-a");
+        assert!(link.routes.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
