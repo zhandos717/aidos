@@ -98,7 +98,10 @@ impl Session {
                     Some(Err(_)) | None => break,
                 },
                 Some(ev) = brain_rx.recv() => self.on_brain(ev),
-                _ = tick.tick() => self.budget = (self.budget + 1).min(LEAD_FRAMES + 1),
+                _ = tick.tick() => {
+                    self.budget = (self.budget + 1).min(LEAD_FRAMES + 1);
+                    self.check_link();
+                }
             }
             if self.flush(&mut tx).await.is_err() {
                 break;
@@ -183,6 +186,22 @@ impl Session {
             }
             DeviceMsg::Other => {}
         }
+    }
+
+    // Без линка TurnEnd не придёт никогда — колонка зависла бы в Thinking/Speaking.
+    // Если TurnEnd уже пришёл, Stop стоит в хвосте очереди за аудио — даём доиграть.
+    fn check_link(&mut self) {
+        if !matches!(self.state, State::Thinking | State::Speaking)
+            || self.link.is_connected()
+            || matches!(self.queue.back(), Some(Out::Stop))
+        {
+            return;
+        }
+        tracing::warn!(device_id = self.device_id, "brain link lost mid-turn");
+        self.turn_id = None;
+        self.queue.clear();
+        self.start_tts();
+        self.queue.push_back(Out::Stop);
     }
 
     fn interrupt(&mut self) {

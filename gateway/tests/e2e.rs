@@ -27,6 +27,7 @@ struct FakeBrain {
     states: Arc<Mutex<Vec<(String, bool)>>>,
     hold_first: bool,
     zero_rate_chunk: bool,
+    kill: Arc<tokio::sync::Notify>,
 }
 
 #[tonic::async_trait]
@@ -41,7 +42,17 @@ impl pb::brain_server::Brain for FakeBrain {
         let (tx, rx) = mpsc::channel(64);
         let me = self.clone();
         tokio::spawn(async move {
-            while let Some(Ok(ev)) = inbound.next().await {
+            loop {
+                let ev = tokio::select! {
+                    ev = inbound.next() => match ev {
+                        Some(Ok(ev)) => ev,
+                        _ => break,
+                    },
+                    _ = me.kill.notified() => {
+                        let _ = tx.send(Err(Status::unavailable("brain killed"))).await;
+                        break;
+                    }
+                };
                 match ev.kind {
                     Some(pb::gateway_event::Kind::Utterance(u)) => {
                         let first = {
@@ -101,14 +112,19 @@ impl pb::brain_server::Brain for FakeBrain {
 }
 
 async fn start_brain(brain: FakeBrain) -> String {
+    start_brain_killable(brain).await.0
+}
+
+async fn start_brain_killable(brain: FakeBrain) -> (String, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(
-        tonic::transport::Server::builder()
+    let server = tokio::spawn(async move {
+        let _ = tonic::transport::Server::builder()
             .add_service(pb::brain_server::BrainServer::new(brain))
-            .serve_with_incoming(TcpListenerStream::new(listener)),
-    );
-    format!("http://{addr}")
+            .serve_with_incoming(TcpListenerStream::new(listener))
+            .await;
+    });
+    (format!("http://{addr}"), server)
 }
 
 async fn start_gateway(brain_addr: String) -> (String, LinkHandle) {
@@ -492,4 +508,39 @@ async fn listen_stop_flushes_manual_mode_speech() {
         heard > 16000 * 2 && heard <= 16000 * 3,
         "utterance samples: {heard}"
     );
+}
+
+#[tokio::test]
+async fn link_drop_mid_turn_stops_device() {
+    let brain = FakeBrain {
+        hold_first: true,
+        ..FakeBrain::default()
+    };
+    let (brain_addr, server) = start_brain_killable(brain.clone()).await;
+    let (addr, link) = start_gateway(brain_addr).await;
+    wait_link(&link, true).await;
+    let mut ws = connect(&addr, TOKEN).await.unwrap();
+    let session = hello(&mut ws).await;
+    speak(&mut ws, &session).await;
+    assert_eq!(next_json(&mut ws).await["type"], "stt");
+    assert_eq!(next_json(&mut ws).await["state"], "start");
+
+    server.abort();
+    brain.kill.notify_one();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let msg = tokio::time::timeout(left, ws.next())
+            .await
+            .expect("no tts stop after link drop")
+            .unwrap()
+            .unwrap();
+        if let Message::Text(t) = msg {
+            let v: serde_json::Value = serde_json::from_str(t.as_str()).unwrap();
+            if v["type"] == "tts" && v["state"] == "stop" {
+                break;
+            }
+        }
+    }
+    assert!(!link.is_connected());
 }
