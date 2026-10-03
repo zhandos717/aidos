@@ -144,11 +144,15 @@ async fn wait_link(link: &LinkHandle, up: bool) {
 }
 
 fn speech_packets() -> Vec<Vec<u8>> {
+    opus_packets(16000 * 2)
+}
+
+fn opus_packets(trailing_silence: usize) -> Vec<Vec<u8>> {
     let manifest = env!("CARGO_MANIFEST_DIR");
     let mut reader =
         hound::WavReader::open(Path::new(manifest).join("tests/fixtures/speech_16k.wav")).unwrap();
     let mut pcm: Vec<i16> = reader.samples::<i16>().map(Result::unwrap).collect();
-    pcm.extend(vec![0i16; 16000 * 2]);
+    pcm.extend(vec![0i16; trailing_silence]);
     let mut enc = opus::Encoder::new(16000, opus::Channels::Mono, opus::Application::Voip).unwrap();
     let mut buf = vec![0u8; 4000];
     pcm.chunks(960)
@@ -453,4 +457,39 @@ async fn reconnect_keeps_device_online() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     drop(ws2);
+}
+
+#[tokio::test]
+async fn listen_stop_flushes_manual_mode_speech() {
+    let brain = FakeBrain::default();
+    let (addr, link) = start_gateway(start_brain(brain.clone()).await).await;
+    wait_link(&link, true).await;
+    let mut ws = connect(&addr, TOKEN).await.unwrap();
+    let session = hello(&mut ws).await;
+    listen_start(&mut ws, &session).await;
+    for p in opus_packets(0) {
+        ws.send(Message::Binary(p.into())).await.unwrap();
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), ws.next())
+            .await
+            .is_err(),
+        "VAD must not endpoint speech without trailing silence"
+    );
+
+    ws.send(Message::Text(
+        format!(r#"{{"session_id":"{session}","type":"listen","state":"stop"}}"#).into(),
+    ))
+    .await
+    .unwrap();
+    let stt = next_json(&mut ws).await;
+    assert_eq!(
+        (stt["type"].as_str(), stt["text"].as_str()),
+        (Some("stt"), Some("сәлем"))
+    );
+    let heard = brain.utterances.lock().unwrap()[0];
+    assert!(
+        heard > 16000 * 2 && heard <= 16000 * 3,
+        "utterance samples: {heard}"
+    );
 }

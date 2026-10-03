@@ -102,6 +102,10 @@ impl Segmenter {
         if self.silence_ms < self.p.end_silence_ms && !too_long {
             return None;
         }
+        self.flush()
+    }
+
+    pub fn flush(&mut self) -> Option<Vec<i16>> {
         let utterance = (self.speech_ms >= self.p.min_speech_ms).then(|| self.frames.concat());
         self.reset();
         utterance
@@ -141,6 +145,12 @@ impl<P: SpeechProb> Endpointer<P> {
         self.seg.reset();
         self.pending.clear();
         self.prob.reset();
+    }
+
+    pub fn flush(&mut self) -> Option<Vec<i16>> {
+        let utterance = self.seg.flush();
+        self.reset();
+        utterance
     }
 }
 
@@ -280,6 +290,32 @@ mod tests {
         assert!(out.iter().all(|u| u.len() == (2000 / FMS) as usize * FRAME));
     }
 
+    #[test]
+    fn flush_returns_speech_without_trailing_silence() {
+        let mut seg = Segmenter::new(params(|p| p.pre_roll_ms = 96));
+        assert!(feed(&mut seg, &probs(&[(0.0, 10), (0.9, ms(800))])).is_empty());
+        let out = seg.flush().unwrap();
+        assert_eq!(out.len(), (ms(96) + ms(800)) * FRAME);
+        assert!(!seg.triggered());
+        assert!(seg.flush().is_none());
+    }
+
+    #[test]
+    fn flush_drops_short_noise_and_resets() {
+        let mut seg = Segmenter::new(SegmenterParams::default());
+        feed(&mut seg, &probs(&[(0.9, ms(100))]));
+        assert!(seg.flush().is_none());
+        assert!(!seg.triggered());
+        assert!(seg.flush().is_none());
+    }
+
+    #[test]
+    fn flush_of_untriggered_segmenter_is_none() {
+        let mut seg = Segmenter::new(SegmenterParams::default());
+        feed(&mut seg, &probs(&[(0.0, ms(1000))]));
+        assert!(seg.flush().is_none());
+    }
+
     struct Loud;
     impl SpeechProb for Loud {
         fn prob(&mut self, frame: &[f32]) -> f32 {
@@ -320,6 +356,18 @@ mod tests {
         assert!(speech * 2 > pcm.len() / FRAME, "speech frames: {speech}");
         vad.reset();
         assert!(vad.prob(&vec![0.0; FRAME]) < 0.5);
+    }
+
+    #[test]
+    fn endpointer_flush_drops_partial_frame_and_resets() {
+        let mut ep = Endpointer::new(Loud, SegmenterParams::default());
+        assert!(ep.push(&vec![1000i16; 16000 + 100]).is_empty());
+        let out = ep.flush().unwrap();
+        assert_eq!(out.len(), 16000 / FRAME * FRAME);
+        assert!(ep.pending.is_empty());
+        assert!(ep.flush().is_none());
+        assert!(ep.push(&vec![0i16; 16000]).is_empty());
+        assert!(ep.flush().is_none());
     }
 
     #[test]

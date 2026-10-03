@@ -175,7 +175,10 @@ impl Session {
                 ..
             } => {
                 if self.state == State::Listening {
-                    self.state = State::Idle;
+                    match self.endpointer.flush() {
+                        Some(utterance) => self.send_utterance(utterance),
+                        None => self.state = State::Idle,
+                    }
                 }
             }
             DeviceMsg::Other => {}
@@ -204,9 +207,12 @@ impl Session {
                 return;
             }
         };
-        let Some(utterance) = self.endpointer.push(&pcm).into_iter().next() else {
-            return;
-        };
+        if let Some(utterance) = self.endpointer.push(&pcm).into_iter().next() {
+            self.send_utterance(utterance);
+        }
+    }
+
+    fn send_utterance(&mut self, utterance: Vec<i16>) {
         let turn_id = uuid::Uuid::new_v4().to_string();
         self.state = State::Thinking;
         let sent = self.link.send(pb::GatewayEvent {
