@@ -6,6 +6,7 @@ import logging
 import uuid
 from typing import TYPE_CHECKING
 
+from aidos.core.device_ctx import current_device
 from aidos.core.memory import MemoryStore
 from aidos.core.tool_registry import ToolRegistry
 from aidos.core.ollama_client import SYSTEM_PROMPT
@@ -51,15 +52,17 @@ class AIAgent:
 
     def handle(self, query: str) -> str:
         _log.info("AIAgent.handle: '%s'", query[:80])
-        self._memory.add_message(self._session_id, "user", query)
+        device_id = current_device.get()
+        session_id = f"device:{device_id}" if device_id else self._session_id
+        self._memory.add_message(session_id, "user", query)
         self._extract_facts(query)
 
         system = self._build_system(query)
-        messages = self._memory.get_session(self._session_id, limit=_MAX_HISTORY)
+        messages = self._memory.get_session(session_id, limit=_MAX_HISTORY)
 
         response = self._react(messages, system)
 
-        self._memory.add_message(self._session_id, "assistant", response)
+        self._memory.add_message(session_id, "assistant", response)
         return response
 
     def set_session(self, session_id: str) -> None:
