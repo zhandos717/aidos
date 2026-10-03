@@ -1,9 +1,11 @@
 """Мәтіннен дауысқа — Piper TTS (офлайн) + edge-tts (fallback)."""
 
 import asyncio
+import io
 import logging
 import os
 import tempfile
+import wave
 from pathlib import Path
 
 from aidos.core.speech_text import clean_for_speech
@@ -55,25 +57,29 @@ class TTSEngine:
             logger.error("Piper модель жүктеу қатесі: %s", exc)
             self._piper_voice = None
 
-    def _speak_piper(self, text: str) -> None:
-        import io
-        import wave
-        import numpy as np
-        import sounddevice as sd
-
-        logger.debug("Piper синтез басталды")
+    def synthesize(self, text: str) -> tuple[bytes, int] | None:
+        if not self._piper_voice:
+            return None
+        text = clean_for_speech(text)
+        if not text:
+            return None
         buf = io.BytesIO()
         with wave.open(buf, "wb") as wav_file:
             self._piper_voice.synthesize_wav(text, wav_file)
-
         buf.seek(0)
         with wave.open(buf, "rb") as wav_file:
-            frames = wav_file.readframes(wav_file.getnframes())
-            audio = np.frombuffer(frames, dtype=np.int16)
+            return wav_file.readframes(wav_file.getnframes()), wav_file.getframerate()
 
-        sd.play(audio, samplerate=self._piper_voice.config.sample_rate)
+    def _speak_piper(self, text: str) -> None:
+        import numpy as np
+        import sounddevice as sd
+
+        result = self.synthesize(text)
+        if result is None:
+            return
+        pcm, rate = result
+        sd.play(np.frombuffer(pcm, dtype=np.int16), samplerate=rate)
         sd.wait()
-        logger.debug("Piper ойнату аяқталды")
 
     async def _speak_edge_async(self, text: str, voice: str) -> None:
         import edge_tts
