@@ -6,12 +6,25 @@ import os
 import tempfile
 from pathlib import Path
 
+from aidos.core.speech_text import clean_for_speech
+
 logger = logging.getLogger("aidos.tts")
 
-_PIPER_VOICE = "kk/kk_KZ/issai/high/kk_KZ-issai-high"
+_PIPER_VOICE = os.getenv("PIPER_VOICE", "kk_KZ-issai-high")
 _PIPER_MODELS_DIR = Path(os.getenv("PIPER_MODELS_DIR", "~/.aidos/piper")).expanduser()
 _EDGE_VOICE = "kk-KZ-AigrimNeural"
 _EDGE_FALLBACK = "ru-RU-SvetlanaNeural"
+
+
+def find_piper_model(models_dir: Path, voice: str) -> Path | None:
+    """`make piper-download` жалпақ қалтаға, HF-тан қолмен жүктеу — ішкі қалтаға салады."""
+    candidates = [models_dir / f"{voice}.onnx"]
+    locale, _, rest = voice.partition("-")
+    speaker, _, quality = rest.rpartition("-")
+    if locale and speaker and quality:
+        lang = locale.split("_")[0]
+        candidates.append(models_dir / lang / locale / speaker / quality / f"{voice}.onnx")
+    return next((p for p in candidates if p.exists()), None)
 
 
 class TTSEngine:
@@ -27,14 +40,10 @@ class TTSEngine:
             logger.info("Piper модель табылмады, edge-tts пайдаланылады")
 
     def _find_piper_model(self) -> Path | None:
-        onnx = _PIPER_MODELS_DIR / f"{_PIPER_VOICE}.onnx"
-        if onnx.exists():
-            return onnx
-        logger.debug("Piper модель жоқ: %s", onnx)
-        return None
-
-    def _find_piper_config(self) -> Path | None:
-        return Path(str(self._piper_model_path) + ".json") if self._piper_model_path else None
+        onnx = find_piper_model(_PIPER_MODELS_DIR, _PIPER_VOICE)
+        if onnx is None:
+            logger.debug("Piper модель жоқ: voice=%s, dir=%s", _PIPER_VOICE, _PIPER_MODELS_DIR)
+        return onnx
 
     def _load_piper(self) -> None:
         """Piper моделін бір рет жүктеп кештеу."""
@@ -88,6 +97,9 @@ class TTSEngine:
             tmp_path.unlink(missing_ok=True)
 
     def speak(self, text: str) -> None:
+        text = clean_for_speech(text)
+        if not text:
+            return
         logger.info("TTS іске қосылды, ұзындығы=%d таңба", len(text))
         logger.debug("TTS мәтін: '%s'", text[:100])
 

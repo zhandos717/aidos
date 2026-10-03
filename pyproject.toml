@@ -18,7 +18,11 @@ dependencies = [
     "numpy>=1.26.0",
     "python-dotenv>=1.0.0",
     "openai>=1.0.0",
+    "silero-vad>=6.2",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
 
 [project.scripts]
 aidos = "aidos.main:main"
@@ -29,3 +33,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/aidos"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

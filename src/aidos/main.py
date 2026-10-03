@@ -219,12 +219,58 @@ def run_both_mode(router: IntentRouter, tts) -> None:
             _log.error("Аралас режим қатесі: %s", exc)
 
 
+def _answer_by_voice(router: IntentRouter, tts, text: str) -> bool:
+    """Жауап беріп айтады; пайдаланушы шыққысы келсе False қайтарады."""
+    query = _normalize_query(text)
+    if query.lower() in _EXIT_WORDS:
+        tts.speak("Сау болыңыз!")
+        return False
+    try:
+        response = router.route(query)
+        console.print(f"[bold cyan]Aidos:[/bold cyan] {response}")
+        tts.speak(response)
+    except Exception as exc:
+        _log.error("Колонка режимі қатесі: %s", exc)
+    return True
+
+
 def run_wake_mode(router: IntentRouter, tts) -> None:
     """Колонка режимі — 'Айдос' деген сөзден кейін тыңдайды."""
     from aidos.core.voice import VoiceInput
-    from aidos.core.wake_word import WakeWordDetector
+    from aidos.core.wake_word import custom_model_available, find_wake_word
 
     voice = VoiceInput()
+    if custom_model_available():
+        _run_wake_with_detector(router, tts, voice)
+        return
+
+    console.print("[dim]🎙  'Айдос' деп айтыңыз немесе бірден сұраңыз: 'Айдос, сағат неше?'[/dim]")
+    _log.info("Колонка режимі іске қосылды (мәтін бойынша триггер)")
+    while True:
+        heard = voice.listen(no_speech_timeout=None)
+        if not heard:
+            continue
+        command = find_wake_word(heard)
+        if command is None:
+            _log.debug("Триггерсіз сөйлем өткізілді: '%s'", heard)
+            continue
+
+        console.print(f"[bold cyan]Сіз:[/bold cyan] {heard}")
+        if not command:
+            tts.speak("Иә?")
+            console.print("[bold cyan]Aidos:[/bold cyan] Иә?")
+            command = voice.listen()
+            if not command:
+                continue
+            console.print(f"[bold cyan]Сіз:[/bold cyan] {command}")
+
+        if not _answer_by_voice(router, tts, command):
+            break
+
+
+def _run_wake_with_detector(router: IntentRouter, tts, voice) -> None:
+    from aidos.core.wake_word import WakeWordDetector
+
     _ready = threading.Event()
 
     def on_wake() -> None:
@@ -248,18 +294,8 @@ def run_wake_mode(router: IntentRouter, tts) -> None:
                 continue
 
             console.print(f"[bold cyan]Сіз:[/bold cyan] {text}")
-            query = _normalize_query(text)
-
-            if query.lower() in _EXIT_WORDS:
-                tts.speak("Сау болыңыз!")
+            if not _answer_by_voice(router, tts, text):
                 break
-
-            try:
-                response = router.route(query)
-                console.print(f"[bold cyan]Aidos:[/bold cyan] {response}")
-                tts.speak(response)
-            except Exception as exc:
-                _log.error("Колонка режимі қатесі: %s", exc)
     finally:
         detector.stop()
 

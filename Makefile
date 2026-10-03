@@ -6,7 +6,7 @@ PIP := $(VENV)/bin/pip
 .PHONY: help install run run-voice run-both run-ui run-wake \
         ollama-start ollama-pull ollama-pull-sherkala \
         use-qwen use-sherkala use-openrouter use-agentrouter \
-        piper-download wake-install lint clean
+        piper-download wake-install test lint clean
 
 help:
 	@echo "Aidos — қазақ AI көмекші"
@@ -20,8 +20,8 @@ help:
 	@echo ""
 	@echo "  Орнату:"
 	@echo "  make install              — тәуелділіктерді орнату"
-	@echo "  make piper-download       — Piper қазақ дауысын жүктеу (kk_KZ-issai-high)
-	@echo "  make wake-install         — openWakeWord орнату (жылдам триггер)""
+	@echo "  make piper-download       — Piper қазақ дауысын жүктеу (kk_KZ-issai-high)"
+	@echo "  make wake-install         — openWakeWord орнату (жылдам триггер)"
 	@echo ""
 	@echo "  AI провайдер:"
 	@echo "  make use-qwen             — Ollama + Qwen3.5:4b"
@@ -34,13 +34,14 @@ help:
 	@echo "  make ollama-pull          — Qwen3.5:4b жүктеу"
 	@echo "  make ollama-pull-sherkala — Sherkala-8B жүктеу"
 	@echo ""
+	@echo "  make test                 — pytest тесттері"
 	@echo "  make lint                 — ruff тексеруі"
 	@echo "  make clean                — venv тазалау"
 
 install:
 	python3 -m venv $(VENV)
 	$(PIP) install --upgrade pip -q
-	$(PIP) install -e . -q
+	$(PIP) install -e ".[dev]" -q
 	@echo "✓ Тәуелділіктер орнатылды"
 	@[ -f .env ] || (cp .env.example .env && echo "✓ .env файлы жасалды — API кілттерін қосыңыз")
 
@@ -121,8 +122,11 @@ wake-install:
 
 # ── Прочее ────────────────────────────────────────────────────────────────────
 
+test:
+	$(PYTHON) -m pytest -q
+
 lint:
-	$(VENV)/bin/ruff check src/
+	$(VENV)/bin/ruff check src/ tests/
 
 clean:
 	rm -rf $(VENV)
