@@ -97,3 +97,121 @@ async def test_abort_cancels_turn():
         await outbox.put(None)
         await channel.close()
         await server.stop(None)
+
+
+def test_empty_token_rejected():
+    with pytest.raises(ValueError):
+        BrainService(_runner(), "")
+
+
+class _Ctx:
+    def invocation_metadata(self):
+        return (("authorization", f"Bearer {TOKEN}"),)
+
+    async def send_initial_metadata(self, md):
+        pass
+
+    async def abort(self, code, details):
+        raise AssertionError(details)
+
+
+class _Gateway:
+    """Drives BrainService.Link directly, without a network, so event ordering is deterministic."""
+
+    def __init__(self, runner):
+        self.inbox: asyncio.Queue = asyncio.Queue()
+        self.link = BrainService(runner, TOKEN).Link(self._requests(), _Ctx())
+
+    async def _requests(self):
+        while (item := await self.inbox.get()) is not None:
+            yield item
+
+    async def send(self, ev):
+        await self.inbox.put(ev)
+
+    async def next(self):
+        return await asyncio.wait_for(self.link.__anext__(), 5)
+
+    async def close(self):
+        await self.inbox.put(None)
+        await self.link.aclose()
+
+
+def _ev(kind, turn_id, **kw):
+    return link_pb2.BrainEvent(**{kind: getattr(link_pb2, {"transcript": "Transcript", "speech": "SpeechChunk", "end": "TurnEnd"}[kind])(device_id="box-1", turn_id=turn_id, **kw)})
+
+
+async def test_abort_drops_already_queued_events():
+    emitted, cancelled = asyncio.Event(), asyncio.Event()
+
+    class Runner:
+        async def run(self, utt):
+            yield _ev("transcript", utt.turn_id, text="x")
+            if utt.turn_id != "slow":
+                yield _ev("end", utt.turn_id)
+                return
+            yield _ev("speech", utt.turn_id, text="stale")
+            emitted.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+    gw = _Gateway(Runner())
+    try:
+        await gw.send(_utt("slow"))
+        assert (await gw.next()).WhichOneof("kind") == "transcript"
+        await asyncio.wait_for(emitted.wait(), 5)
+        await gw.send(link_pb2.GatewayEvent(abort=link_pb2.Abort(device_id="box-1", turn_id="slow")))
+        await asyncio.wait_for(cancelled.wait(), 5)
+
+        await gw.send(_utt("next"))
+        ev = await gw.next()
+        assert getattr(ev, ev.WhichOneof("kind")).turn_id == "next"
+    finally:
+        await gw.close()
+
+
+async def test_finished_turn_does_not_unregister_newer_turn_with_same_id():
+    first_done, release_first, second_started, cancelled = (asyncio.Event() for _ in range(4))
+    calls = []
+
+    class Runner:
+        async def run(self, utt):
+            calls.append(1)
+            if len(calls) == 1:
+                yield _ev("end", utt.turn_id)
+                await release_first.wait()
+                first_done.set()
+                return
+            yield _ev("transcript", utt.turn_id, text="second")
+            second_started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+    gw = _Gateway(Runner())
+    try:
+        await gw.send(_utt("dup"))
+        assert (await gw.next()).WhichOneof("kind") == "end"
+        await gw.send(_utt("dup"))
+        assert (await gw.next()).WhichOneof("kind") == "transcript"
+        release_first.set()
+        await asyncio.wait_for(first_done.wait(), 5)
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        await gw.send(link_pb2.GatewayEvent(abort=link_pb2.Abort(device_id="box-1", turn_id="dup")))
+        await asyncio.wait_for(cancelled.wait(), 5)
+    finally:
+        await gw.close()
+
+
+async def test_request_stream_error_ends_link_cleanly():
+    async def broken():
+        raise RuntimeError("boom")
+        yield
+
+    link = BrainService(_runner(), TOKEN).Link(broken(), _Ctx())
+    assert [e async for e in link] == []
