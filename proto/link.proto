@@ -1,0 +1,48 @@
+syntax = "proto3";
+package aidos.link.v1;
+
+service Brain {
+  rpc Link(stream GatewayEvent) returns (stream BrainEvent);
+}
+
+message GatewayEvent {
+  oneof kind {
+    Utterance utterance = 1;
+    Abort abort = 2;
+    DeviceState state = 3;
+    PushAck push_ack = 4;
+  }
+}
+
+message Utterance { string device_id = 1; string turn_id = 2; bytes pcm_s16le = 3; uint32 sample_rate = 4; }
+message Abort { string device_id = 1; string turn_id = 2; }
+message DeviceState { string device_id = 1; bool online = 2; }
+message PushAck { string push_id = 1; }
+
+message BrainEvent {
+  oneof kind {
+    Transcript transcript = 1;
+    SpeechChunk speech = 2;
+    Action action = 3;
+    TurnEnd end = 4;
+    Push push = 5;
+  }
+}
+
+message Transcript { string device_id = 1; string turn_id = 2; string text = 3; }
+message SpeechChunk { string device_id = 1; string turn_id = 2; string text = 3; bytes pcm_s16le = 4; uint32 sample_rate = 5; }
+message TurnEnd { string device_id = 1; string turn_id = 2; bool error = 3; }
+message Push { string push_id = 1; string device_id = 2; string text = 3; SpeechChunk speech = 4; int64 created_at_unix = 5; }
+
+message Action {
+  string device_id = 1;
+  string turn_id = 2;
+  oneof kind {
+    PlayStream play = 3;
+    Empty stop = 4;
+    Empty pause = 5;
+    Empty resume = 6;
+  }
+}
+message PlayStream { string url = 1; string title = 2; }
+message Empty {}

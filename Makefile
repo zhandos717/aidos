@@ -6,7 +6,7 @@ PIP := $(VENV)/bin/pip
 .PHONY: help install run run-voice run-both run-ui run-wake \
         ollama-start ollama-pull ollama-pull-sherkala \
         use-qwen use-sherkala use-openrouter use-agentrouter \
-        piper-download wake-install test lint clean
+        piper-download wake-install proto test lint clean
 
 help:
 	@echo "Aidos — қазақ AI көмекші"
@@ -36,6 +36,7 @@ help:
 	@echo ""
 	@echo "  make test                 — pytest тесттері"
 	@echo "  make lint                 — ruff тексеруі"
+	@echo "  make proto                — gRPC кодын генерациялау (Python)"
 	@echo "  make clean                — venv тазалау"
 
 install:
@@ -119,6 +120,11 @@ wake-install:
 	@echo "  1. pip install openwakeword[training]"
 	@echo "  2. python -m openwakeword.train --help"
 	@echo "  3. .env файлына: WAKE_WORD_MODEL=~/.aidos/aidos_wake.onnx"
+
+# ── gRPC ──────────────────────────────────────────────────────────────────────
+
+proto:
+	$(PYTHON) -m grpc_tools.protoc -Iaidos/brain/gen=proto --python_out=src --grpc_python_out=src --pyi_out=src proto/link.proto
 
 # ── Прочее ────────────────────────────────────────────────────────────────────
 
