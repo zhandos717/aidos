@@ -73,7 +73,7 @@ brain:
 # ── Rust (Gateway) ────────────────────────────────────────────────────────────
 
 gateway:
-	cd gateway && cargo run --release
+	cd gateway && if [ -f ../.env ]; then set -a && . ../.env && set +a; fi && cargo run --release
 
 gateway-test:
 	cd gateway && cargo test
