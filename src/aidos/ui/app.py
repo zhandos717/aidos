@@ -9,7 +9,7 @@ from datetime import datetime
 
 import customtkinter as ctk
 
-from aidos.ui.theme import BG, BG3, BG4, BLUE, RED, UI_STATE_FILE, ICON_PNG
+from aidos.ui.theme import BG, BG3, BLUE, UI_STATE_FILE, ICON_PNG
 from aidos.ui.session import ChatSession
 from aidos.ui.sidebar import Sidebar
 from aidos.ui.chat import ChatArea
