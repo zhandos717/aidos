@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use aidos_gateway::config::Config;
 use aidos_gateway::link::LinkHandle;
@@ -24,7 +24,9 @@ const REPLY_MS: usize = 500;
 struct FakeBrain {
     utterances: Arc<Mutex<Vec<usize>>>,
     aborts: Arc<Mutex<Vec<String>>>,
-    hold: bool,
+    states: Arc<Mutex<Vec<(String, bool)>>>,
+    hold_first: bool,
+    zero_rate_chunk: bool,
 }
 
 #[tonic::async_trait]
@@ -42,7 +44,11 @@ impl pb::brain_server::Brain for FakeBrain {
             while let Some(Ok(ev)) = inbound.next().await {
                 match ev.kind {
                     Some(pb::gateway_event::Kind::Utterance(u)) => {
-                        me.utterances.lock().unwrap().push(u.pcm_s16le.len() / 2);
+                        let first = {
+                            let mut utterances = me.utterances.lock().unwrap();
+                            utterances.push(u.pcm_s16le.len() / 2);
+                            utterances.len() == 1
+                        };
                         let ids = (u.device_id.clone(), u.turn_id.clone());
                         let send = |kind| tx.send(Ok(pb::BrainEvent { kind: Some(kind) }));
                         let _ = send(Kind::Transcript(pb::Transcript {
@@ -52,6 +58,16 @@ impl pb::brain_server::Brain for FakeBrain {
                         }))
                         .await;
                         let pcm: Vec<u8> = vec![0u8; 22050 * REPLY_MS / 1000 * 2];
+                        if me.zero_rate_chunk {
+                            let _ = send(Kind::Speech(pb::SpeechChunk {
+                                device_id: ids.0.clone(),
+                                turn_id: ids.1.clone(),
+                                text: "broken".into(),
+                                pcm_s16le: pcm.clone(),
+                                sample_rate: 0,
+                            }))
+                            .await;
+                        }
                         let _ = send(Kind::Speech(pb::SpeechChunk {
                             device_id: ids.0.clone(),
                             turn_id: ids.1.clone(),
@@ -60,7 +76,7 @@ impl pb::brain_server::Brain for FakeBrain {
                             sample_rate: 22050,
                         }))
                         .await;
-                        if me.hold {
+                        if me.hold_first && first {
                             continue;
                         }
                         let _ = send(Kind::End(pb::TurnEnd {
@@ -72,6 +88,9 @@ impl pb::brain_server::Brain for FakeBrain {
                     }
                     Some(pb::gateway_event::Kind::Abort(a)) => {
                         me.aborts.lock().unwrap().push(a.turn_id)
+                    }
+                    Some(pb::gateway_event::Kind::State(st)) => {
+                        me.states.lock().unwrap().push((st.device_id, st.online))
                     }
                     _ => {}
                 }
@@ -180,12 +199,44 @@ async fn hello(ws: &mut Ws) -> String {
 }
 
 async fn speak(ws: &mut Ws, session: &str) {
+    listen_start(ws, session).await;
+    send_speech(ws).await;
+}
+
+async fn listen_start(ws: &mut Ws, session: &str) {
     ws.send(Message::Text(
         format!(r#"{{"session_id":"{session}","type":"listen","state":"start","mode":"auto"}}"#)
             .into(),
     ))
     .await
     .unwrap();
+}
+
+fn reply_frames() -> usize {
+    (24000 * REPLY_MS / 1000).div_ceil(1440)
+}
+
+async fn frames_until_stop(ws: &mut Ws) -> usize {
+    let mut frames = 0;
+    loop {
+        match tokio::time::timeout(Duration::from_secs(5), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+        {
+            Message::Binary(_) => frames += 1,
+            Message::Text(t) => {
+                let v: serde_json::Value = serde_json::from_str(t.as_str()).unwrap();
+                assert_eq!(v["state"], "stop");
+                return frames;
+            }
+            _ => {}
+        }
+    }
+}
+
+async fn send_speech(ws: &mut Ws) {
     for p in speech_packets() {
         ws.send(Message::Binary(p.into())).await.unwrap();
     }
@@ -212,24 +263,15 @@ async fn full_turn_over_websocket() {
         (Some("sentence_start"), Some("Сәлем!"))
     );
 
-    let mut frames = 0;
-    loop {
-        match tokio::time::timeout(Duration::from_secs(5), ws.next())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap()
-        {
-            Message::Binary(_) => frames += 1,
-            Message::Text(t) => {
-                let v: serde_json::Value = serde_json::from_str(t.as_str()).unwrap();
-                assert_eq!(v["state"], "stop");
-                break;
-            }
-            _ => {}
-        }
-    }
-    assert_eq!(frames, (24000 * REPLY_MS / 1000).div_ceil(1440));
+    let started = Instant::now();
+    let frames = frames_until_stop(&mut ws).await;
+    let elapsed = started.elapsed();
+    assert_eq!(frames, reply_frames());
+    let paced = Duration::from_millis(60) * (frames as u32 - 3);
+    assert!(
+        elapsed >= paced,
+        "{frames} frames in {elapsed:?}, expected >= {paced:?}"
+    );
     let heard = brain.utterances.lock().unwrap()[0];
     assert!(
         heard > 16000 * 2 && heard < 16000 * 5,
@@ -240,7 +282,7 @@ async fn full_turn_over_websocket() {
 #[tokio::test]
 async fn barge_in_aborts_turn() {
     let brain = FakeBrain {
-        hold: true,
+        hold_first: true,
         ..FakeBrain::default()
     };
     let (addr, link) = start_gateway(start_brain(brain.clone()).await).await;
@@ -316,4 +358,99 @@ async fn ota_known_device_gets_websocket() {
 async fn ota_unknown_device_forbidden() {
     let (addr, _link) = start_gateway(start_brain(FakeBrain::default()).await).await;
     assert_eq!(post_ota(&addr, "ff:ff:ff:ff:ff:ff").await.0, 403);
+}
+
+#[tokio::test]
+async fn barge_in_with_listen_start_keeps_listening() {
+    let brain = FakeBrain {
+        hold_first: true,
+        ..FakeBrain::default()
+    };
+    let (addr, link) = start_gateway(start_brain(brain.clone()).await).await;
+    wait_link(&link, true).await;
+    let mut ws = connect(&addr, TOKEN).await.unwrap();
+    let session = hello(&mut ws).await;
+    speak(&mut ws, &session).await;
+    assert_eq!(next_json(&mut ws).await["type"], "stt");
+    assert_eq!(next_json(&mut ws).await["state"], "start");
+
+    listen_start(&mut ws, &session).await;
+    loop {
+        if next_json(&mut ws).await["state"] == "stop" {
+            break;
+        }
+    }
+    send_speech(&mut ws).await;
+    loop {
+        if next_json(&mut ws).await["type"] == "stt" {
+            break;
+        }
+    }
+    assert_eq!(brain.utterances.lock().unwrap().len(), 2);
+    assert_eq!(brain.aborts.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn zero_sample_rate_chunk_is_skipped() {
+    let brain = FakeBrain {
+        zero_rate_chunk: true,
+        ..FakeBrain::default()
+    };
+    let (addr, link) = start_gateway(start_brain(brain.clone()).await).await;
+    wait_link(&link, true).await;
+    let mut ws = connect(&addr, TOKEN).await.unwrap();
+    let session = hello(&mut ws).await;
+    for _ in 0..2 {
+        speak(&mut ws, &session).await;
+        assert_eq!(next_json(&mut ws).await["type"], "stt");
+        assert_eq!(next_json(&mut ws).await["state"], "start");
+        let sentence = next_json(&mut ws).await;
+        assert_eq!(
+            (sentence["state"].as_str(), sentence["text"].as_str()),
+            (Some("sentence_start"), Some("Сәлем!"))
+        );
+        assert_eq!(frames_until_stop(&mut ws).await, reply_frames());
+    }
+}
+
+#[tokio::test]
+async fn reconnect_keeps_device_online() {
+    let brain = FakeBrain::default();
+    let (addr, link) = start_gateway(start_brain(brain.clone()).await).await;
+    wait_link(&link, true).await;
+    let mut ws1 = connect(&addr, TOKEN).await.unwrap();
+    hello(&mut ws1).await;
+    let mut ws2 = connect(&addr, TOKEN).await.unwrap();
+    hello(&mut ws2).await;
+    ws1.close(None).await.unwrap();
+    while ws1.next().await.is_some() {}
+
+    let last_state = || {
+        brain
+            .states
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|(d, _)| d == DEVICE)
+            .map(|(_, online)| *online)
+    };
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while brain.states.lock().unwrap().len() < 2 {
+        assert!(
+            Instant::now() < deadline,
+            "online events never reached the brain"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    for _ in 0..15 {
+        assert_eq!(
+            last_state(),
+            Some(true),
+            "states: {:?}",
+            brain.states.lock().unwrap()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    drop(ws2);
 }

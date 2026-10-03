@@ -108,7 +108,11 @@ impl Session {
         if let Some(turn_id) = self.turn_id.take() {
             self.send_abort(turn_id);
         }
-        self.link.send(state_event(&self.device_id, false));
+        // A closed receiver means a newer session for this device took over the route
+        // and already reported it online.
+        if !brain_rx.is_closed() {
+            self.link.send(state_event(&self.device_id, false));
+        }
     }
 
     async fn flush(
@@ -241,6 +245,13 @@ impl Session {
                 .queue
                 .push_back(Out::Json(xiaozhi::stt(&self.session_id, &t.text))),
             Some(Kind::Speech(chunk)) => {
+                if chunk.sample_rate == 0 {
+                    tracing::warn!(
+                        device_id = self.device_id,
+                        "speech chunk without sample rate skipped"
+                    );
+                    return;
+                }
                 self.start_tts();
                 self.state = State::Speaking;
                 self.queue.push_back(Out::Json(xiaozhi::tts_sentence(
