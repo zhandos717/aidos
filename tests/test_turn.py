@@ -67,3 +67,35 @@ async def test_respond_exception_is_error():
 
     events = await _collect(TurnRunner(lambda a: "сәлем", boom, _synth), _utt())
     assert events[-1].end.error is True
+
+
+async def test_odd_length_pcm_is_error():
+    utt = link_pb2.Utterance(device_id="box-1", turn_id="t1", pcm_s16le=b"\x01\x00\x02", sample_rate=16000)
+    events = await _collect(TurnRunner(lambda a: "x", lambda t: "x", _synth), utt)
+    assert [e.WhichOneof("kind") for e in events] == ["end"]
+    assert events[0].end.error is True
+
+
+async def test_transcribe_exception_is_error():
+    def boom(audio):
+        raise RuntimeError("stt model error")
+
+    events = await _collect(TurnRunner(boom, lambda t: "x", _synth), _utt())
+    assert [e.WhichOneof("kind") for e in events] == ["end"]
+    assert events[0].end.error is True
+
+
+async def test_synthesize_exception_skips_sentence():
+    def boom_first(text):
+        if text == "Қазір сағат он екі.":
+            raise RuntimeError("tts model error")
+        return (b"\x00\x00" * len(text), 22050)
+
+    events = await _collect(
+        TurnRunner(lambda a: "сәлем", lambda t: "Қазір сағат он екі. Түскі ас уақыты жақын!", boom_first),
+        _utt()
+    )
+    kinds = [e.WhichOneof("kind") for e in events]
+    assert kinds == ["transcript", "speech", "end"]
+    assert events[1].speech.text == "Түскі ас уақыты жақын!"
+    assert events[2].end.error is False

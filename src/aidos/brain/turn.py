@@ -34,8 +34,14 @@ class TurnRunner:
             yield _end(ids, error=True)
             return
 
-        audio = np.frombuffer(utt.pcm_s16le, dtype=np.int16).astype(np.float32) / 32768.0
-        text = await asyncio.to_thread(self.transcribe, audio)
+        try:
+            audio = np.frombuffer(utt.pcm_s16le, dtype=np.int16).astype(np.float32) / 32768.0
+            text = await asyncio.to_thread(self.transcribe, audio)
+        except Exception as exc:
+            _log.error("STT қатесі (device=%s): %s", utt.device_id, exc)
+            yield _end(ids, error=True)
+            return
+
         if not text:
             yield _end(ids, error=True)
             return
@@ -50,7 +56,12 @@ class TurnRunner:
 
         spoken = 0
         for sentence in split_sentences(clean_for_speech(reply)):
-            result = await asyncio.to_thread(self.synthesize, sentence)
+            try:
+                result = await asyncio.to_thread(self.synthesize, sentence)
+            except Exception as exc:
+                _log.error("TTS қатесі (device=%s): %s", utt.device_id, exc)
+                continue
+
             if result is None:
                 continue
             pcm, rate = result
