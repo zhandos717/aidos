@@ -5,3 +5,4 @@ pub mod audio;
 pub mod config;
 pub mod xiaozhi;
 pub mod vad;
+pub mod link;
