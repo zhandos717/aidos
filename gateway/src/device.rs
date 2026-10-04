@@ -190,7 +190,7 @@ impl Session {
         };
         match msg {
             DeviceMsg::Hello { version, .. } => {
-                if version > 1 {
+                if version != 1 {
                     tracing::warn!(
                         device_id = self.device_id,
                         version,
