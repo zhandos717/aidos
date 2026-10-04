@@ -5,6 +5,7 @@ pub mod audio;
 pub mod config;
 pub mod device;
 pub mod link;
+pub mod metrics;
 pub mod server;
 pub mod vad;
 pub mod xiaozhi;
