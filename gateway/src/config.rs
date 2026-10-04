@@ -13,6 +13,7 @@ pub struct Config {
     pub devices: HashMap<String, String>,
     pub silero_model: PathBuf,
     pub tz_offset_min: i32,
+    pub emulator_device: Option<String>,
 }
 
 pub fn parse_devices(spec: &str) -> HashMap<String, String> {
@@ -45,6 +46,8 @@ impl Config {
             tz_offset_min: env("GATEWAY_TZ_OFFSET_MIN", "300")
                 .parse()
                 .context("GATEWAY_TZ_OFFSET_MIN")?,
+            emulator_device: Some(env("GATEWAY_EMULATOR_DEVICE", "web-emulator"))
+                .filter(|s| !s.is_empty()),
         })
     }
 }

@@ -141,9 +141,13 @@ async fn start_gateway(brain_addr: String) -> (String, LinkHandle) {
         public_ws_url: format!("ws://{addr}/ws"),
         brain_addr: brain_addr.clone(),
         link_token: "link".into(),
-        devices: HashMap::from([(DEVICE.to_string(), TOKEN.to_string())]),
+        devices: HashMap::from([
+            (DEVICE.to_string(), TOKEN.to_string()),
+            ("web-emulator".to_string(), "emu-token".to_string()),
+        ]),
         silero_model: Path::new(manifest).join("models/silero_vad.onnx"),
         tz_offset_min: 300,
+        emulator_device: Some("web-emulator".into()),
     };
     let hub = aidos_gateway::metrics::MetricsHub::new();
     let link = LinkHandle::with_metrics(brain_addr, "link".into(), hub.clone());
@@ -153,6 +157,7 @@ async fn start_gateway(brain_addr: String) -> (String, LinkHandle) {
             cfg: Arc::new(cfg),
             link: link.clone(),
             hub,
+            emulator: Some(("web-emulator".into(), "emu-token".into())),
         },
     ));
     (format!("{addr}"), link)
@@ -647,4 +652,86 @@ async fn brain_down_turn_recorded_as_error() {
     speak(&mut ws, &session).await;
     let state = wait_turn_status(&addr, "error").await;
     assert_eq!(state["link"]["up"], false);
+}
+
+async fn get_raw(addr: &str, path: &str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(
+            format!("GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).await.unwrap();
+    raw
+}
+
+#[tokio::test]
+async fn static_pages_served() {
+    let (addr, _link) = start_gateway(start_brain(FakeBrain::default()).await).await;
+    let page = get_raw(&addr, "/").await;
+    assert!(
+        page.starts_with("HTTP/1.1 200") && page.contains("text/html"),
+        "{page}"
+    );
+    assert!(get_raw(&addr, "/app.js").await.contains("javascript"));
+    assert!(get_raw(&addr, "/app.css").await.contains("text/css"));
+}
+
+#[tokio::test]
+async fn emulator_endpoint_and_query_token_auth() {
+    let (addr, link) = start_gateway(start_brain(FakeBrain::default()).await).await;
+    wait_link(&link, true).await;
+    let info = get_json(&addr, "/api/emulator").await;
+    assert_eq!(info["device_id"], "web-emulator");
+    let token = info["token"].as_str().unwrap();
+    let url = format!("ws://{addr}/ws?token={token}");
+    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+    ws.send(Message::Text(r#"{"type":"hello","version":1,"transport":"websocket","audio_params":{"format":"opus","sample_rate":16000,"channels":1,"frame_duration":60}}"#.into())).await.unwrap();
+    assert_eq!(next_json(&mut ws).await["type"], "hello");
+}
+
+#[tokio::test]
+async fn emulator_token_rejected_for_regular_device() {
+    let (addr, _link) = start_gateway(start_brain(FakeBrain::default()).await).await;
+    let url = format!("ws://{addr}/ws?token={TOKEN}");
+    assert!(tokio_tungstenite::connect_async(url).await.is_err());
+}
+
+#[tokio::test]
+async fn sse_streams_turn_events() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let brain = FakeBrain::default();
+    let (addr, link) = start_gateway(start_brain(brain.clone()).await).await;
+    wait_link(&link, true).await;
+    let mut sse = tokio::net::TcpStream::connect(&addr).await.unwrap();
+    sse.write_all(b"GET /api/events HTTP/1.1\r\nHost: x\r\nAccept: text/event-stream\r\n\r\n")
+        .await
+        .unwrap();
+    let mut lines = BufReader::new(sse).lines();
+
+    let mut ws = connect(&addr, TOKEN).await.unwrap();
+    let session = hello(&mut ws).await;
+    speak(&mut ws, &session).await;
+
+    let mut kinds = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while !kinds.contains(&"turn_end".to_string()) {
+        let line = tokio::time::timeout_at(deadline, lines.next_line())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        if let Some(data) = line.strip_prefix("data:") {
+            let v: serde_json::Value = serde_json::from_str(data.trim()).unwrap();
+            kinds.push(v["type"].as_str().unwrap().to_string());
+        }
+    }
+    let pos = |k: &str| kinds.iter().position(|x| x == k).unwrap();
+    assert!(
+        pos("turn_started") < pos("transcript") && pos("transcript") < pos("turn_end"),
+        "{kinds:?}"
+    );
 }
