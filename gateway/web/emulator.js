@@ -158,7 +158,7 @@ export function initEmulator(root) {
     async function micStart() {
       if (recording || !held || talk.disabled) return;
       try {
-        stream ??= await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false } });
+        stream ??= await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       } catch {
         status("Нет доступа к микрофону — разрешите его в браузере.", "note");
         return;

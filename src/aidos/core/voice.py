@@ -133,9 +133,9 @@ class VoiceInput:
     def preload(self) -> None:
         self._load_model()
 
-    def transcribe(self, audio: "np.ndarray") -> str | None:
+    def transcribe(self, audio: "np.ndarray", *, check_silence: bool = True) -> str | None:
         """Берілген numpy аудио массивін мәтінге аудару."""
-        if _is_silent(audio):
+        if check_silence and _is_silent(audio):
             return None
         self._load_model()
         try:

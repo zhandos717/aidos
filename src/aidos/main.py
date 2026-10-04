@@ -1,6 +1,7 @@
 """Aidos — қазақ тілді AI көмекші, негізгі цикл."""
 
 import argparse
+import functools
 import logging
 import sys
 import threading
@@ -319,7 +320,7 @@ def run_brain_mode(router: IntentRouter, tts) -> None:
         console.print("[yellow]⚠ Piper жүктелмеген — колонкаға дыбыс жіберілмейді[/yellow]")
     voice = VoiceInput()
     voice.preload()
-    runner = TurnRunner(transcribe=voice.transcribe, respond=router.route, synthesize=tts.synthesize)
+    runner = TurnRunner(transcribe=functools.partial(voice.transcribe, check_silence=False), respond=router.route, synthesize=tts.synthesize)
     console.print(f"[green]✓ Мозг тыңдауда: {bind}[/green]")
     asyncio.run(serve(BrainService(runner, token), bind))
 
