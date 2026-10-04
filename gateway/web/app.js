@@ -95,8 +95,16 @@ function upsertTurn(turn) {
 }
 
 async function resync() {
-  const res = await fetch("/api/state");
-  if (res.ok) { state = await res.json(); renderAll(); }
+  try {
+    const res = await fetch("/api/state");
+    if (!res.ok) return;
+    state = await res.json();
+  } catch {
+    return;
+  }
+  renderAll();
+  const last = state.turns.find((t) => t.status !== "active");
+  if (last) showStageTimings(last);
 }
 
 function onEvent(ev) {
@@ -121,7 +129,7 @@ function onEvent(ev) {
     }
     case "turn_end":
       upsertTurn(ev.turn); activate([]); showStageTimings(ev.turn);
-      void fetch("/api/state").then((r) => r.json()).then((s) => { state.summary = s.summary; renderSummary(); });
+      void fetch("/api/state").then((r) => r.json()).then((s) => { state.summary = s.summary; renderSummary(); }).catch(() => {});
       renderTurns(); return;
   }
 }
