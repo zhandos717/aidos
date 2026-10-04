@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 
 from aidos.brain.gen import link_pb2
@@ -99,9 +101,6 @@ async def test_synthesize_exception_skips_sentence():
     assert kinds == ["transcript", "speech", "end"]
     assert events[1].speech.text == "Түскі ас уақыты жақын!"
     assert events[2].end.error is False
-
-
-import time
 
 
 def _slow(value, delay=0.02):
