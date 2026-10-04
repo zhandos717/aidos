@@ -12,6 +12,7 @@ async fn main() -> anyhow::Result<()> {
     let base = args
         .next()
         .unwrap_or_else(|| "http://127.0.0.1:8000".into());
+    let base = base.trim_end_matches('/').to_string();
 
     let info: serde_json::Value = {
         let host = base.trim_start_matches("http://");
@@ -24,7 +25,13 @@ async fn main() -> anyhow::Result<()> {
         .await?;
         let mut raw = String::new();
         s.read_to_string(&mut raw).await?;
-        serde_json::from_str(raw.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or(""))?
+        let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((raw.as_str(), ""));
+        let status = head.lines().next().unwrap_or("");
+        anyhow::ensure!(
+            status.starts_with("HTTP/1.1 200"),
+            "/api/emulator returned {status}: {body}"
+        );
+        serde_json::from_str(body)?
     };
     let token = info["token"]
         .as_str()
@@ -44,14 +51,24 @@ async fn main() -> anyhow::Result<()> {
     let pcm: Vec<i16> = reader.samples::<i16>().collect::<Result<_, _>>()?;
 
     ws.send(Message::Text(r#"{"type":"hello","version":1,"transport":"websocket","audio_params":{"format":"opus","sample_rate":16000,"channels":1,"frame_duration":60}}"#.into())).await?;
-    let session = loop {
-        if let Some(Message::Text(t)) = ws.next().await.transpose()? {
-            let v: serde_json::Value = serde_json::from_str(t.as_str())?;
-            if v["type"] == "hello" {
-                break v["session_id"].as_str().unwrap_or_default().to_string();
+    let session = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match ws.next().await.transpose()? {
+                Some(Message::Text(t)) => {
+                    let v: serde_json::Value = serde_json::from_str(t.as_str())?;
+                    if v["type"] == "hello" {
+                        return anyhow::Ok(
+                            v["session_id"].as_str().unwrap_or_default().to_string(),
+                        );
+                    }
+                }
+                Some(_) => {}
+                None => anyhow::bail!("connection closed before hello"),
             }
         }
-    };
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("no hello within 10 s"))??;
     ws.send(Message::Text(
         format!(r#"{{"session_id":"{session}","type":"listen","state":"start","mode":"manual"}}"#)
             .into(),
@@ -59,8 +76,10 @@ async fn main() -> anyhow::Result<()> {
     .await?;
     let mut enc = opus::Encoder::new(16000, opus::Channels::Mono, opus::Application::Voip)?;
     let mut buf = vec![0u8; 4000];
-    for chunk in pcm.chunks(960).filter(|c| c.len() == 960) {
-        let n = enc.encode(chunk, &mut buf)?;
+    for chunk in pcm.chunks(960) {
+        let mut frame = [0i16; 960];
+        frame[..chunk.len()].copy_from_slice(chunk);
+        let n = enc.encode(&frame, &mut buf)?;
         ws.send(Message::Binary(buf[..n].to_vec().into())).await?;
         tokio::time::sleep(Duration::from_millis(60)).await;
     }
@@ -71,8 +90,11 @@ async fn main() -> anyhow::Result<()> {
     let started = std::time::Instant::now();
 
     let mut frames = 0;
-    tokio::time::timeout(Duration::from_secs(30), async {
-        while let Some(msg) = ws.next().await {
+    let outcome = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let Some(msg) = ws.next().await else {
+                anyhow::bail!("connection closed before tts stop ({frames} frames)");
+            };
             match msg? {
                 Message::Binary(_) => frames += 1,
                 Message::Text(t) => {
@@ -99,7 +121,11 @@ async fn main() -> anyhow::Result<()> {
         }
         anyhow::Ok(())
     })
-    .await??;
+    .await;
+    match outcome {
+        Ok(r) => r?,
+        Err(_) => anyhow::bail!("no tts stop within 30 s ({frames} frames received)"),
+    }
     println!(
         "кадров ответа: {frames} (~{:.1} с), всего {} мс",
         frames as f32 * 0.06,
