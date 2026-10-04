@@ -99,3 +99,36 @@ async def test_synthesize_exception_skips_sentence():
     assert kinds == ["transcript", "speech", "end"]
     assert events[1].speech.text == "Түскі ас уақыты жақын!"
     assert events[2].end.error is False
+
+
+import time
+
+
+def _slow(value, delay=0.02):
+    def fn(*_):
+        time.sleep(delay)
+        return value
+    return fn
+
+
+async def test_timings_reported_on_success():
+    runner = TurnRunner(
+        transcribe=_slow("сағат неше"),
+        respond=_slow("Қазір сағат он екі. Түскі ас уақыты жақын!"),
+        synthesize=_slow((b"\x00\x00" * 10, 22050), delay=0.01),
+    )
+    events = await _collect(runner, _utt())
+    end = events[-1].end
+    assert end.error is False
+    assert end.timings.stt_ms >= 20
+    assert end.timings.llm_ms >= 20
+    assert end.timings.tts_ms >= 20
+
+
+async def test_timings_on_empty_transcript():
+    runner = TurnRunner(transcribe=_slow(None), respond=lambda t: "x", synthesize=_synth)
+    events = await _collect(runner, _utt())
+    end = events[-1].end
+    assert end.error is True
+    assert end.timings.stt_ms >= 20
+    assert (end.timings.llm_ms, end.timings.tts_ms) == (0, 0)

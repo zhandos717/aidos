@@ -31,7 +31,8 @@ message BrainEvent {
 
 message Transcript { string device_id = 1; string turn_id = 2; string text = 3; }
 message SpeechChunk { string device_id = 1; string turn_id = 2; string text = 3; bytes pcm_s16le = 4; uint32 sample_rate = 5; }
-message TurnEnd { string device_id = 1; string turn_id = 2; bool error = 3; }
+message TurnTimings { uint32 stt_ms = 1; uint32 llm_ms = 2; uint32 tts_ms = 3; }
+message TurnEnd { string device_id = 1; string turn_id = 2; bool error = 3; TurnTimings timings = 4; }
 message Push { string push_id = 1; string device_id = 2; string text = 3; SpeechChunk speech = 4; int64 created_at_unix = 5; }
 
 message Action {

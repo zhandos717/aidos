@@ -89,15 +89,27 @@ class SpeechChunk(_message.Message):
     sample_rate: int
     def __init__(self, device_id: _Optional[str] = ..., turn_id: _Optional[str] = ..., text: _Optional[str] = ..., pcm_s16le: _Optional[bytes] = ..., sample_rate: _Optional[int] = ...) -> None: ...
 
+class TurnTimings(_message.Message):
+    __slots__ = ("stt_ms", "llm_ms", "tts_ms")
+    STT_MS_FIELD_NUMBER: _ClassVar[int]
+    LLM_MS_FIELD_NUMBER: _ClassVar[int]
+    TTS_MS_FIELD_NUMBER: _ClassVar[int]
+    stt_ms: int
+    llm_ms: int
+    tts_ms: int
+    def __init__(self, stt_ms: _Optional[int] = ..., llm_ms: _Optional[int] = ..., tts_ms: _Optional[int] = ...) -> None: ...
+
 class TurnEnd(_message.Message):
-    __slots__ = ("device_id", "turn_id", "error")
+    __slots__ = ("device_id", "turn_id", "error", "timings")
     DEVICE_ID_FIELD_NUMBER: _ClassVar[int]
     TURN_ID_FIELD_NUMBER: _ClassVar[int]
     ERROR_FIELD_NUMBER: _ClassVar[int]
+    TIMINGS_FIELD_NUMBER: _ClassVar[int]
     device_id: str
     turn_id: str
     error: bool
-    def __init__(self, device_id: _Optional[str] = ..., turn_id: _Optional[str] = ..., error: _Optional[bool] = ...) -> None: ...
+    timings: TurnTimings
+    def __init__(self, device_id: _Optional[str] = ..., turn_id: _Optional[str] = ..., error: _Optional[bool] = ..., timings: _Optional[_Union[TurnTimings, _Mapping]] = ...) -> None: ...
 
 class Push(_message.Message):
     __slots__ = ("push_id", "device_id", "text", "speech", "created_at_unix")

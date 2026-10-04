@@ -94,6 +94,7 @@ impl pb::brain_server::Brain for FakeBrain {
                             device_id: ids.0,
                             turn_id: ids.1,
                             error: false,
+                            timings: None,
                         }))
                         .await;
                     }
