@@ -222,7 +222,12 @@ impl Session {
                 if self.state == State::Listening {
                     match self.endpointer.flush() {
                         Some(utterance) => self.send_utterance(utterance),
-                        None => self.set_state(State::Idle),
+                        // The client shows "thinking" after listen stop until it gets tts stop.
+                        None => {
+                            self.set_state(State::Idle);
+                            self.start_tts();
+                            self.queue.push_back(Out::Stop);
+                        }
                     }
                 }
             }

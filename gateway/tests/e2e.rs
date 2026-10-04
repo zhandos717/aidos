@@ -551,6 +551,47 @@ async fn listen_stop_flushes_manual_mode_speech() {
 }
 
 #[tokio::test]
+async fn short_press_without_speech_ends_turn() {
+    let brain = FakeBrain::default();
+    let (addr, link) = start_gateway(start_brain(brain.clone()).await).await;
+    wait_link(&link, true).await;
+    let mut ws = connect(&addr, TOKEN).await.unwrap();
+    let session = hello(&mut ws).await;
+    listen_start(&mut ws, &session).await;
+    let mut enc = opus::Encoder::new(16000, opus::Channels::Mono, opus::Application::Voip).unwrap();
+    let mut buf = vec![0u8; 4000];
+    for _ in 0..5 {
+        let n = enc.encode(&[0i16; 960], &mut buf).unwrap();
+        ws.send(Message::Binary(buf[..n].to_vec().into()))
+            .await
+            .unwrap();
+    }
+    ws.send(Message::Text(
+        format!(r#"{{"session_id":"{session}","type":"listen","state":"stop"}}"#).into(),
+    ))
+    .await
+    .unwrap();
+    let start = next_json(&mut ws).await;
+    assert_eq!(
+        (start["type"].as_str(), start["state"].as_str()),
+        (Some("tts"), Some("start"))
+    );
+    let stop = next_json(&mut ws).await;
+    assert_eq!(
+        (stop["type"].as_str(), stop["state"].as_str()),
+        (Some("tts"), Some("stop"))
+    );
+    assert!(brain.utterances.lock().unwrap().is_empty());
+    assert_eq!(
+        get_json(&addr, "/api/state").await["turns"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
+#[tokio::test]
 async fn link_drop_mid_turn_stops_device() {
     let brain = FakeBrain {
         hold_first: true,
