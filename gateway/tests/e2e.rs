@@ -298,7 +298,10 @@ async fn full_turn_over_websocket() {
     let frames = frames_until_stop(&mut ws).await;
     let elapsed = started.elapsed();
     assert_eq!(frames, reply_frames());
-    let paced = Duration::from_millis(60) * (frames as u32 - 3);
+    // The first tick lands anywhere in 0..60 ms after sentence_start, and LEAD_FRAMES go out
+    // without waiting for a tick.
+    const LEAD_FRAMES: u32 = 2;
+    let paced = Duration::from_millis(60) * (frames as u32 - LEAD_FRAMES - 2);
     assert!(
         elapsed >= paced,
         "{frames} frames in {elapsed:?}, expected >= {paced:?}"
@@ -336,7 +339,12 @@ async fn barge_in_aborts_turn() {
             break;
         }
     }
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while brain.aborts.lock().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "abort never reached the brain");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(brain.aborts.lock().unwrap().len(), 1);
 }
 
