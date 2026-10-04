@@ -227,3 +227,24 @@ async def test_request_stream_error_ends_link_cleanly():
 
     link = BrainService(_runner(), TOKEN).Link(broken(), _Ctx())
     assert [e async for e in link] == []
+
+
+async def test_start_server_sets_keepalive_options(monkeypatch):
+    from aidos.brain import server as server_mod
+
+    captured = {}
+    real = grpc.aio.server
+
+    def spy(*args, **kwargs):
+        captured.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(server_mod.grpc.aio, "server", spy)
+    server, _ = await start_server(BrainService(_runner(), TOKEN), "127.0.0.1:0")
+    await server.stop(None)
+    assert dict(captured["options"]) == {
+        "grpc.keepalive_permit_without_calls": 1,
+        "grpc.http2.min_ping_interval_without_data_ms": 5000,
+        "grpc.http2.max_pings_without_data": 0,
+        "grpc.http2.min_recv_ping_interval_without_data_ms": 5000,
+    }

@@ -13,6 +13,14 @@ from aidos.brain.turn import TurnRunner
 
 _log = logging.getLogger("aidos.brain.server")
 
+# Шлюз HTTP/2 keepalive-ті әр 10 с жібереді; әдепкі grpc мұны too_many_pings деп GOAWAY-мен үзеді.
+_SERVER_OPTIONS = [
+    ("grpc.keepalive_permit_without_calls", 1),
+    ("grpc.http2.min_ping_interval_without_data_ms", 5000),
+    ("grpc.http2.max_pings_without_data", 0),
+    ("grpc.http2.min_recv_ping_interval_without_data_ms", 5000),
+]
+
 
 class BrainService(link_pb2_grpc.BrainServicer):
     def __init__(self, runner: TurnRunner, token: str) -> None:
@@ -92,7 +100,7 @@ class BrainService(link_pb2_grpc.BrainServicer):
 
 
 async def start_server(service: BrainService, bind: str) -> tuple[grpc.aio.Server, int]:
-    server = grpc.aio.server()
+    server = grpc.aio.server(options=_SERVER_OPTIONS)
     link_pb2_grpc.add_BrainServicer_to_server(service, server)
     port = server.add_insecure_port(bind)
     await server.start()
