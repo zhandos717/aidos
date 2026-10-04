@@ -453,7 +453,7 @@ async fn reconnect_keeps_device_online() {
     hello(&mut ws1).await;
     let mut ws2 = connect(&addr, TOKEN).await.unwrap();
     hello(&mut ws2).await;
-    ws1.close(None).await.unwrap();
+    let _ = ws1.close(None).await;
     while ws1.next().await.is_some() {}
 
     let last_state = || {
@@ -484,6 +484,27 @@ async fn reconnect_keeps_device_online() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     drop(ws2);
+}
+
+#[tokio::test]
+async fn superseded_session_closed_by_server() {
+    let (addr, link) = start_gateway(start_brain(FakeBrain::default()).await).await;
+    wait_link(&link, true).await;
+    let mut ws1 = connect(&addr, TOKEN).await.unwrap();
+    hello(&mut ws1).await;
+    let mut ws2 = connect(&addr, TOKEN).await.unwrap();
+    hello(&mut ws2).await;
+    let closed = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match ws1.next().await {
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return,
+                Some(Ok(_)) => {}
+            }
+        }
+    })
+    .await;
+    assert!(closed.is_ok(), "superseded connection was not closed");
+    hello(&mut ws2).await;
 }
 
 #[tokio::test]

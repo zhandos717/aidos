@@ -125,7 +125,11 @@ impl Session {
                     Some(Ok(_)) => {}
                     Some(Err(_)) | None => break,
                 },
-                Some(ev) = brain_rx.recv() => self.on_brain(ev),
+                // None: a newer session for this device took over the route.
+                ev = brain_rx.recv() => match ev {
+                    Some(ev) => self.on_brain(ev),
+                    None => break,
+                },
                 _ = tick.tick() => {
                     self.budget = (self.budget + 1).min(LEAD_FRAMES + 1);
                     self.check_link();
