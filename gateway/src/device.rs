@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket};
@@ -8,6 +9,7 @@ use tokio::time::MissedTickBehavior;
 
 use crate::audio::{self, DownEncoder, UpDecoder};
 use crate::link::{LinkHandle, event_turn_id};
+use crate::metrics::{MetricsHub, TurnStatus};
 use crate::pb;
 use crate::pb::brain_event::Kind;
 use crate::vad::{Endpointer, SegmenterParams, SileroVad};
@@ -21,6 +23,17 @@ enum State {
     Listening,
     Thinking,
     Speaking,
+}
+
+impl State {
+    fn label(self) -> &'static str {
+        match self {
+            State::Idle => "idle",
+            State::Listening => "listening",
+            State::Thinking => "thinking",
+            State::Speaking => "speaking",
+        }
+    }
 }
 
 enum Out {
@@ -41,6 +54,7 @@ struct Session {
     decoder: UpDecoder,
     encoder: DownEncoder,
     endpointer: Endpointer<SileroVad>,
+    hub: Arc<MetricsHub>,
 }
 
 pub async fn run_device(
@@ -48,8 +62,9 @@ pub async fn run_device(
     device_id: String,
     link: LinkHandle,
     silero_model: PathBuf,
+    hub: Arc<MetricsHub>,
 ) {
-    let session = match Session::new(device_id.clone(), link.clone(), &silero_model) {
+    let session = match Session::new(device_id.clone(), link.clone(), &silero_model, hub) {
         Ok(s) => s,
         Err(err) => {
             tracing::error!(%err, device_id, "cannot start device session");
@@ -64,7 +79,12 @@ pub async fn run_device(
 }
 
 impl Session {
-    fn new(device_id: String, link: LinkHandle, silero_model: &Path) -> anyhow::Result<Self> {
+    fn new(
+        device_id: String,
+        link: LinkHandle,
+        silero_model: &Path,
+        hub: Arc<MetricsHub>,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
             session_id: uuid::Uuid::new_v4().to_string(),
             device_id,
@@ -77,7 +97,15 @@ impl Session {
             decoder: UpDecoder::new()?,
             encoder: DownEncoder::new()?,
             endpointer: Endpointer::new(SileroVad::load(silero_model)?, SegmenterParams::default()),
+            hub,
         })
+    }
+
+    fn set_state(&mut self, state: State) {
+        if self.state != state {
+            self.state = state;
+            self.hub.device(&self.device_id, true, state.label());
+        }
     }
 
     async fn run(
@@ -109,12 +137,14 @@ impl Session {
         }
 
         if let Some(turn_id) = self.turn_id.take() {
+            self.hub.turn_end(&turn_id, TurnStatus::Aborted, None);
             self.send_abort(turn_id);
         }
         // A closed receiver means a newer session for this device took over the route
         // and already reported it online.
         if !brain_rx.is_closed() {
             self.link.send(state_event(&self.device_id, false));
+            self.hub.device(&self.device_id, false, "idle");
         }
     }
 
@@ -136,7 +166,7 @@ impl Session {
                         .await?;
                     // После barge-in через listen start колонка уже слушает — не сбрасываем её в Idle.
                     if matches!(self.state, State::Thinking | State::Speaking) {
-                        self.state = State::Idle;
+                        self.set_state(State::Idle);
                     }
                     self.turn_id = None;
                     self.tts_started = false;
@@ -166,13 +196,14 @@ impl Session {
                 self.queue
                     .push_back(Out::Json(xiaozhi::server_hello(&self.session_id)));
                 self.link.send(state_event(&self.device_id, true));
+                self.hub.device(&self.device_id, true, self.state.label());
             }
             DeviceMsg::Listen {
                 state: ListenState::Start,
                 ..
             } => {
                 self.interrupt();
-                self.state = State::Listening;
+                self.set_state(State::Listening);
                 self.endpointer.reset();
             }
             DeviceMsg::Listen {
@@ -187,7 +218,7 @@ impl Session {
                 if self.state == State::Listening {
                     match self.endpointer.flush() {
                         Some(utterance) => self.send_utterance(utterance),
-                        None => self.state = State::Idle,
+                        None => self.set_state(State::Idle),
                     }
                 }
             }
@@ -205,7 +236,9 @@ impl Session {
             return;
         }
         tracing::warn!(device_id = self.device_id, "brain link lost mid-turn");
-        self.turn_id = None;
+        if let Some(turn_id) = self.turn_id.take() {
+            self.hub.turn_end(&turn_id, TurnStatus::Error, None);
+        }
         self.queue.clear();
         self.start_tts();
         self.queue.push_back(Out::Stop);
@@ -216,6 +249,7 @@ impl Session {
             return;
         }
         if let Some(turn_id) = self.turn_id.take() {
+            self.hub.turn_end(&turn_id, TurnStatus::Aborted, None);
             self.send_abort(turn_id);
         }
         self.queue.clear();
@@ -240,7 +274,12 @@ impl Session {
 
     fn send_utterance(&mut self, utterance: Vec<i16>) {
         let turn_id = uuid::Uuid::new_v4().to_string();
-        self.state = State::Thinking;
+        self.hub.turn_started(
+            &self.device_id,
+            &turn_id,
+            utterance.len() as f32 / audio::UP_RATE as f32,
+        );
+        self.set_state(State::Thinking);
         let sent = self.link.send(pb::GatewayEvent {
             kind: Some(pb::gateway_event::Kind::Utterance(pb::Utterance {
                 device_id: self.device_id.clone(),
@@ -262,6 +301,7 @@ impl Session {
                 device_id = self.device_id,
                 "brain unavailable, dropping utterance"
             );
+            self.hub.turn_end(&turn_id, TurnStatus::Error, None);
             self.queue
                 .push_back(Out::Json(xiaozhi::tts_start(&self.session_id)));
             self.queue.push_back(Out::Stop);
@@ -272,10 +312,13 @@ impl Session {
         if self.turn_id.as_deref() != event_turn_id(&ev) {
             return;
         }
+        let turn_id = self.turn_id.clone().unwrap_or_default();
         match ev.kind {
-            Some(Kind::Transcript(t)) => self
-                .queue
-                .push_back(Out::Json(xiaozhi::stt(&self.session_id, &t.text))),
+            Some(Kind::Transcript(t)) => {
+                self.hub.transcript(&turn_id, &t.text);
+                self.queue
+                    .push_back(Out::Json(xiaozhi::stt(&self.session_id, &t.text)));
+            }
             Some(Kind::Speech(chunk)) => {
                 if chunk.sample_rate == 0 {
                     tracing::warn!(
@@ -285,7 +328,7 @@ impl Session {
                     return;
                 }
                 self.start_tts();
-                self.state = State::Speaking;
+                self.set_state(State::Speaking);
                 self.queue.push_back(Out::Json(xiaozhi::tts_sentence(
                     &self.session_id,
                     &chunk.text,
@@ -295,12 +338,24 @@ impl Session {
                     chunk.sample_rate,
                     audio::DOWN_RATE,
                 );
+                self.hub.speech(
+                    &turn_id,
+                    &chunk.text,
+                    pcm.len() as f32 / audio::DOWN_RATE as f32,
+                );
                 match self.encoder.encode_all(&pcm) {
                     Ok(packets) => self.queue.extend(packets.into_iter().map(Out::Audio)),
                     Err(err) => tracing::error!(%err, "opus encode failed"),
                 }
             }
-            Some(Kind::End(_)) => {
+            Some(Kind::End(end)) => {
+                let status = if end.error {
+                    TurnStatus::Error
+                } else {
+                    TurnStatus::Ok
+                };
+                let timings = end.timings.map(|t| (t.stt_ms, t.llm_ms, t.tts_ms));
+                self.hub.turn_end(&turn_id, status, timings);
                 self.start_tts();
                 self.queue.push_back(Out::Stop);
             }

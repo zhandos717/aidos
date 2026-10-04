@@ -8,7 +8,7 @@ use aidos_gateway::config::Config;
 use aidos_gateway::link::LinkHandle;
 use aidos_gateway::pb;
 use aidos_gateway::pb::brain_event::Kind;
-use aidos_gateway::server::{AppState, router};
+use aidos_gateway::server::AppState;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio_stream::Stream;
@@ -94,7 +94,11 @@ impl pb::brain_server::Brain for FakeBrain {
                             device_id: ids.0,
                             turn_id: ids.1,
                             error: false,
-                            timings: None,
+                            timings: Some(pb::TurnTimings {
+                                stt_ms: 900,
+                                llm_ms: 1600,
+                                tts_ms: 200,
+                            }),
                         }))
                         .await;
                     }
@@ -141,12 +145,16 @@ async fn start_gateway(brain_addr: String) -> (String, LinkHandle) {
         silero_model: Path::new(manifest).join("models/silero_vad.onnx"),
         tz_offset_min: 300,
     };
-    let link = LinkHandle::spawn(brain_addr, "link".into());
-    let app = router(AppState {
-        cfg: Arc::new(cfg),
-        link: link.clone(),
-    });
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let hub = aidos_gateway::metrics::MetricsHub::new();
+    let link = LinkHandle::with_metrics(brain_addr, "link".into(), hub.clone());
+    tokio::spawn(aidos_gateway::server::serve(
+        listener,
+        AppState {
+            cfg: Arc::new(cfg),
+            link: link.clone(),
+            hub,
+        },
+    ));
     (format!("{addr}"), link)
 }
 
@@ -544,4 +552,99 @@ async fn link_drop_mid_turn_stops_device() {
         }
     }
     assert!(!link.is_connected());
+    wait_turn_status(&addr, "error").await;
+}
+
+async fn get_json(addr: &str, path: &str) -> serde_json::Value {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(
+            format!("GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).await.unwrap();
+    assert!(raw.starts_with("HTTP/1.1 200"), "{raw}");
+    let body = raw.split_once("\r\n\r\n").unwrap().1;
+    serde_json::from_str(body).unwrap()
+}
+
+async fn wait_turn_status(addr: &str, status: &str) -> serde_json::Value {
+    for _ in 0..100 {
+        let state = get_json(addr, "/api/state").await;
+        if let Some(t) = state["turns"].as_array().and_then(|t| t.first())
+            && t["status"] == status
+        {
+            return state;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("no turn with status {status}");
+}
+
+#[tokio::test]
+async fn state_records_completed_turn() {
+    let brain = FakeBrain::default();
+    let (addr, link) = start_gateway(start_brain(brain.clone()).await).await;
+    wait_link(&link, true).await;
+    let mut ws = connect(&addr, TOKEN).await.unwrap();
+    let session = hello(&mut ws).await;
+    speak(&mut ws, &session).await;
+    let state = wait_turn_status(&addr, "ok").await;
+    let turn = &state["turns"][0];
+    assert_eq!(turn["device_id"], DEVICE);
+    assert_eq!(turn["transcript"], "сәлем");
+    assert_eq!(turn["reply_text"], "Сәлем!");
+    assert_eq!(
+        (
+            turn["stt_ms"].as_u64(),
+            turn["llm_ms"].as_u64(),
+            turn["tts_ms"].as_u64()
+        ),
+        (Some(900), Some(1600), Some(200))
+    );
+    assert!(turn["first_audio_ms"].as_u64().is_some());
+    assert_eq!(state["summary"]["turns"], 1);
+    assert_eq!(state["link"]["up"], true);
+    assert!(
+        state["devices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["device_id"] == DEVICE && d["online"] == true)
+    );
+}
+
+#[tokio::test]
+async fn aborted_turn_in_state() {
+    let brain = FakeBrain {
+        hold_first: true,
+        ..FakeBrain::default()
+    };
+    let (addr, link) = start_gateway(start_brain(brain.clone()).await).await;
+    wait_link(&link, true).await;
+    let mut ws = connect(&addr, TOKEN).await.unwrap();
+    let session = hello(&mut ws).await;
+    speak(&mut ws, &session).await;
+    assert_eq!(next_json(&mut ws).await["type"], "stt");
+    ws.send(Message::Text(
+        format!(r#"{{"session_id":"{session}","type":"abort","reason":"wake_word_detected"}}"#)
+            .into(),
+    ))
+    .await
+    .unwrap();
+    wait_turn_status(&addr, "aborted").await;
+}
+
+#[tokio::test]
+async fn brain_down_turn_recorded_as_error() {
+    let (addr, link) = start_gateway("http://127.0.0.1:1".into()).await;
+    wait_link(&link, false).await;
+    let mut ws = connect(&addr, TOKEN).await.unwrap();
+    let session = hello(&mut ws).await;
+    speak(&mut ws, &session).await;
+    let state = wait_turn_status(&addr, "error").await;
+    assert_eq!(state["link"]["up"], false);
 }

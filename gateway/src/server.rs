@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -11,11 +12,13 @@ use serde_json::json;
 use crate::config::Config;
 use crate::device::run_device;
 use crate::link::LinkHandle;
+use crate::metrics::MetricsHub;
 
 #[derive(Clone)]
 pub struct AppState {
     pub cfg: Arc<Config>,
     pub link: LinkHandle,
+    pub hub: Arc<MetricsHub>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -23,7 +26,20 @@ pub fn router(state: AppState) -> Router {
         .route("/ota", post(ota).get(ota))
         .route("/ota/", post(ota).get(ota))
         .route("/ws", get(ws))
+        .route("/api/state", get(api_state))
         .with_state(state)
+}
+
+pub async fn serve(listener: tokio::net::TcpListener, state: AppState) -> std::io::Result<()> {
+    axum::serve(
+        listener,
+        router(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+}
+
+async fn api_state(State(st): State<AppState>) -> Response {
+    Json(st.hub.snapshot()).into_response()
 }
 
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -66,5 +82,5 @@ async fn ws(State(st): State<AppState>, headers: HeaderMap, upgrade: WebSocketUp
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let model = st.cfg.silero_model.clone();
-    upgrade.on_upgrade(move |socket| run_device(socket, device_id, st.link, model))
+    upgrade.on_upgrade(move |socket| run_device(socket, device_id, st.link, model, st.hub))
 }

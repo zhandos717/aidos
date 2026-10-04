@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
 
+use crate::metrics::MetricsHub;
 use crate::pb;
 use crate::pb::brain_client::BrainClient;
 use crate::pb::brain_event::Kind;
@@ -42,6 +43,14 @@ pub fn event_turn_id(ev: &pb::BrainEvent) -> Option<&str> {
 
 impl LinkHandle {
     pub fn spawn(brain_addr: String, token: String) -> LinkHandle {
+        Self::start(brain_addr, token, None)
+    }
+
+    pub fn with_metrics(brain_addr: String, token: String, hub: Arc<MetricsHub>) -> LinkHandle {
+        Self::start(brain_addr, token, Some(hub))
+    }
+
+    fn start(brain_addr: String, token: String, metrics: Option<Arc<MetricsHub>>) -> LinkHandle {
         let (out, rx) = mpsc::channel(256);
         let handle = LinkHandle {
             out,
@@ -54,6 +63,7 @@ impl LinkHandle {
             rx,
             handle.routes.clone(),
             handle.connected.clone(),
+            metrics,
         ));
         handle
     }
@@ -89,14 +99,27 @@ async fn run(
     mut outbox: mpsc::Receiver<pb::GatewayEvent>,
     routes: Routes,
     connected: Arc<AtomicBool>,
+    metrics: Option<Arc<MetricsHub>>,
 ) {
     let mut backoff = Duration::from_secs(1);
     loop {
-        match connect_once(&addr, &token, &mut outbox, &routes, &connected).await {
+        match connect_once(
+            &addr,
+            &token,
+            &mut outbox,
+            &routes,
+            &connected,
+            metrics.as_deref(),
+        )
+        .await
+        {
             Ok(()) => return,
             Err(err) => tracing::warn!(%err, ?backoff, "brain link down"),
         }
         if connected.swap(false, Ordering::Relaxed) {
+            if let Some(m) = &metrics {
+                m.link(false);
+            }
             backoff = Duration::from_secs(1);
         }
         loop {
@@ -117,6 +140,7 @@ async fn connect_once(
     outbox: &mut mpsc::Receiver<pb::GatewayEvent>,
     routes: &Routes,
     connected: &AtomicBool,
+    metrics: Option<&MetricsHub>,
 ) -> anyhow::Result<()> {
     let channel = tonic::transport::Endpoint::from_shared(addr.to_string())?
         .connect_timeout(Duration::from_secs(5))
@@ -132,6 +156,9 @@ async fn connect_once(
         .insert("authorization", format!("Bearer {token}").parse()?);
     let mut inbound = client.link(req).await?.into_inner();
     connected.store(true, Ordering::Relaxed);
+    if let Some(m) = metrics {
+        m.link(true);
+    }
     tracing::info!(addr, "brain link up");
 
     let mut pending: Option<pb::GatewayEvent> = None;

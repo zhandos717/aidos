@@ -4,7 +4,8 @@ use anyhow::Context;
 
 use aidos_gateway::config::Config;
 use aidos_gateway::link::LinkHandle;
-use aidos_gateway::server::{AppState, router};
+use aidos_gateway::metrics::MetricsHub;
+use aidos_gateway::server::{self, AppState};
 use aidos_gateway::vad::SileroVad;
 use tracing_subscriber::EnvFilter;
 
@@ -20,15 +21,18 @@ async fn main() -> anyhow::Result<()> {
             cfg.silero_model.display()
         )
     })?;
-    let link = LinkHandle::spawn(cfg.brain_addr.clone(), cfg.link_token.clone());
+    let hub = MetricsHub::new();
+    let link =
+        LinkHandle::with_metrics(cfg.brain_addr.clone(), cfg.link_token.clone(), hub.clone());
     let listener = tokio::net::TcpListener::bind(cfg.bind).await?;
     tracing::info!(bind = %cfg.bind, brain = cfg.brain_addr, devices = cfg.devices.len(), "aidos-gateway listening");
-    axum::serve(
+    server::serve(
         listener,
-        router(AppState {
+        AppState {
             cfg: Arc::new(cfg),
             link,
-        }),
+            hub,
+        },
     )
     .await?;
     Ok(())
