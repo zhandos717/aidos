@@ -7,6 +7,7 @@ use std::convert::Infallible;
 use std::time::Duration;
 
 use axum::Router;
+use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::extract::{ConnectInfo, Query, Request, State, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode, header::CONTENT_TYPE};
 use axum::middleware::{self, Next};
@@ -29,7 +30,8 @@ pub struct AppState {
     pub cfg: Arc<Config>,
     pub link: LinkHandle,
     pub hub: Arc<MetricsHub>,
-    /// (device_id, token) of the browser emulator; the token is also present in `cfg.devices`.
+    /// (device_id, token) of the browser emulator. Deliberately absent from `cfg.devices`, so
+    /// `/ota` and Bearer auth never see it; only the loopback `?token=` branch of `/ws` does.
     pub emulator: Option<(String, String)>,
 }
 
@@ -79,7 +81,16 @@ pub fn router(state: AppState) -> Router {
 }
 
 pub fn is_loopback(addr: &SocketAddr) -> bool {
-    addr.ip().is_loopback()
+    addr.ip().to_canonical().is_loopback()
+}
+
+/// Rejects DNS-rebinding: a page on a foreign origin resolved to 127.0.0.1 still sends its own Host.
+fn is_local_host(host: &str) -> bool {
+    let name = match host.strip_prefix('[') {
+        Some(rest) => rest.split_once(']').map_or(rest, |(name, _)| name),
+        None => host.split(':').next().unwrap_or(host),
+    };
+    name.eq_ignore_ascii_case("localhost") || name == "127.0.0.1" || name == "::1"
 }
 
 async fn local_only(
@@ -87,7 +98,8 @@ async fn local_only(
     req: Request,
     next: Next,
 ) -> Response {
-    if is_loopback(&addr) {
+    let host_ok = header(req.headers(), "Host").is_some_and(is_local_host);
+    if is_loopback(&addr) && host_ok {
         next.run(req).await
     } else {
         StatusCode::FORBIDDEN.into_response()
@@ -105,9 +117,11 @@ enum DashItem {
 }
 
 fn dash_stream(rx: broadcast::Receiver<DashEvent>) -> impl Stream<Item = DashItem> {
-    BroadcastStream::new(rx).map(|item| match item {
-        Ok(ev) => DashItem::Event(serde_json::to_string(&ev).unwrap_or_default()),
-        Err(BroadcastStreamRecvError::Lagged(_)) => DashItem::Resync,
+    BroadcastStream::new(rx).filter_map(|item| async move {
+        match item {
+            Ok(ev) => serde_json::to_string(&ev).ok().map(DashItem::Event),
+            Err(BroadcastStreamRecvError::Lagged(_)) => Some(DashItem::Resync),
+        }
     })
 }
 
@@ -180,7 +194,7 @@ async fn ws(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Query(q): Query<HashMap<String, String>>,
     headers: HeaderMap,
-    upgrade: WebSocketUpgrade,
+    upgrade: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
 ) -> Response {
     let header_token = header(&headers, "Authorization").and_then(|v| v.strip_prefix("Bearer "));
     let device = match (header_token, q.get("token")) {
@@ -198,6 +212,10 @@ async fn ws(
     if header(&headers, "Device-Id").is_some_and(|claimed| claimed != device_id) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
+    let upgrade = match upgrade {
+        Ok(upgrade) => upgrade,
+        Err(rejection) => return rejection.into_response(),
+    };
     let model = st.cfg.silero_model.clone();
     upgrade.on_upgrade(move |socket| run_device(socket, device_id, st.link, model, st.hub))
 }
@@ -210,6 +228,7 @@ mod tests {
     fn is_loopback_v4_and_v6() {
         assert!(is_loopback(&"127.0.0.1:5000".parse().unwrap()));
         assert!(is_loopback(&"[::1]:5000".parse().unwrap()));
+        assert!(is_loopback(&"[::ffff:127.0.0.1]:5000".parse().unwrap()));
         assert!(!is_loopback(&"192.168.1.20:5000".parse().unwrap()));
         assert!(!is_loopback(&"10.0.0.1:80".parse().unwrap()));
     }
@@ -224,5 +243,130 @@ mod tests {
         let mut stream = Box::pin(dash_stream(rx));
         let first = stream.next().await.unwrap();
         assert_eq!(first, DashItem::Resync);
+    }
+
+    mod guards {
+        use std::path::PathBuf;
+
+        use axum::body::Body;
+        use axum::extract::connect_info::MockConnectInfo;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        use super::*;
+
+        const EMU_TOKEN: &str = "emu-secret";
+        const LAN: &str = "192.168.1.50:5555";
+        const LOCAL: &str = "127.0.0.1:5555";
+
+        fn app(peer: &str) -> Router {
+            let cfg = Config {
+                bind: "127.0.0.1:0".parse().unwrap(),
+                public_ws_url: "ws://127.0.0.1:0/ws".into(),
+                brain_addr: "http://127.0.0.1:1".into(),
+                link_token: "t".into(),
+                devices: HashMap::from([("box".to_string(), "box-token".to_string())]),
+                silero_model: PathBuf::from("models/silero_vad.onnx"),
+                tz_offset_min: 300,
+                emulator_device: Some("web-emulator".into()),
+            };
+            let state = AppState {
+                cfg: Arc::new(cfg),
+                link: LinkHandle::spawn("http://127.0.0.1:1".into(), "t".into()),
+                hub: MetricsHub::new(),
+                emulator: Some(("web-emulator".into(), EMU_TOKEN.into())),
+            };
+            router(state).layer(MockConnectInfo(peer.parse::<SocketAddr>().unwrap()))
+        }
+
+        async fn status(peer: &str, req: Request<Body>) -> StatusCode {
+            app(peer).oneshot(req).await.unwrap().status()
+        }
+
+        fn get_req(path: &str, host: &str) -> Request<Body> {
+            Request::get(path)
+                .header("Host", host)
+                .body(Body::empty())
+                .unwrap()
+        }
+
+        fn ws_req(uri: &str) -> axum::http::request::Builder {
+            Request::get(uri)
+                .header("Host", "127.0.0.1:8000")
+                .header("Connection", "upgrade")
+                .header("Upgrade", "websocket")
+                .header("Sec-WebSocket-Version", "13")
+                .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+        }
+
+        #[tokio::test]
+        async fn dashboard_routes_forbidden_from_lan() {
+            for path in ["/", "/app.js", "/api/state", "/api/events", "/api/emulator"] {
+                assert_eq!(
+                    status(LAN, get_req(path, "127.0.0.1:8000")).await,
+                    StatusCode::FORBIDDEN,
+                    "{path}"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn emulator_info_allowed_from_loopback() {
+            for host in [
+                "127.0.0.1:8000",
+                "localhost:8000",
+                "[::1]:8000",
+                "localhost",
+            ] {
+                assert_eq!(
+                    status(LOCAL, get_req("/api/emulator", host)).await,
+                    StatusCode::OK,
+                    "{host}"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn foreign_or_missing_host_forbidden_from_loopback() {
+            assert_eq!(
+                status(LOCAL, get_req("/api/emulator", "evil.example")).await,
+                StatusCode::FORBIDDEN
+            );
+            assert_eq!(
+                status(LOCAL, get_req("/", "evil.example:8000")).await,
+                StatusCode::FORBIDDEN
+            );
+            let no_host = Request::get("/api/state").body(Body::empty()).unwrap();
+            assert_eq!(status(LOCAL, no_host).await, StatusCode::FORBIDDEN);
+        }
+
+        #[tokio::test]
+        async fn emulator_query_token_rejected_from_lan() {
+            let req = ws_req(&format!("/ws?token={EMU_TOKEN}"))
+                .body(Body::empty())
+                .unwrap();
+            assert_eq!(status(LAN, req).await, StatusCode::UNAUTHORIZED);
+        }
+
+        #[tokio::test]
+        async fn emulator_token_never_valid_as_bearer() {
+            for peer in [LAN, LOCAL] {
+                let req = ws_req("/ws")
+                    .header("Authorization", format!("Bearer {EMU_TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap();
+                assert_eq!(status(peer, req).await, StatusCode::UNAUTHORIZED, "{peer}");
+            }
+        }
+
+        #[tokio::test]
+        async fn ota_does_not_know_emulator() {
+            let req = Request::post("/ota")
+                .header("Host", "192.168.1.10:8000")
+                .header("Device-Id", "web-emulator")
+                .body(Body::empty())
+                .unwrap();
+            assert_eq!(status(LAN, req).await, StatusCode::FORBIDDEN);
+        }
     }
 }

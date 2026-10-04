@@ -24,14 +24,12 @@ async fn main() -> anyhow::Result<()> {
     let hub = MetricsHub::new();
     let link =
         LinkHandle::with_metrics(cfg.brain_addr.clone(), cfg.link_token.clone(), hub.clone());
-    let mut cfg = cfg;
     let emulator = cfg.emulator_device.clone().map(|id| {
         let token = format!(
             "{}{}",
             uuid::Uuid::new_v4().simple(),
             uuid::Uuid::new_v4().simple()
         );
-        cfg.devices.insert(id.clone(), token.clone());
         (id, token)
     });
     let listener = tokio::net::TcpListener::bind(cfg.bind).await?;

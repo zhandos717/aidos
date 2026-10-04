@@ -28,6 +28,7 @@ uuid = { version = "1", features = ["v4"] }
 [dev-dependencies]
 hound = "3.5"
 tokio-tungstenite = "0.30"
+tower = { version = "0.5", features = ["util"] }
 
 [build-dependencies]
 protoc-bin-vendored = "3"

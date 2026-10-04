@@ -141,10 +141,7 @@ async fn start_gateway(brain_addr: String) -> (String, LinkHandle) {
         public_ws_url: format!("ws://{addr}/ws"),
         brain_addr: brain_addr.clone(),
         link_token: "link".into(),
-        devices: HashMap::from([
-            (DEVICE.to_string(), TOKEN.to_string()),
-            ("web-emulator".to_string(), "emu-token".to_string()),
-        ]),
+        devices: HashMap::from([(DEVICE.to_string(), TOKEN.to_string())]),
         silero_model: Path::new(manifest).join("models/silero_vad.onnx"),
         tz_offset_min: 300,
         emulator_device: Some("web-emulator".into()),
@@ -364,7 +361,7 @@ async fn post_ota(addr: &str, device: &str) -> (u16, String) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
     let req = format!(
-        "POST /ota HTTP/1.1\r\nHost: x\r\nDevice-Id: {device}\r\nClient-Id: c1\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+        "POST /ota HTTP/1.1\r\nHost: 127.0.0.1\r\nDevice-Id: {device}\r\nClient-Id: c1\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
     );
     stream.write_all(req.as_bytes()).await.unwrap();
     let mut raw = String::new();
@@ -565,7 +562,8 @@ async fn get_json(addr: &str, path: &str) -> serde_json::Value {
     let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
     stream
         .write_all(
-            format!("GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").as_bytes(),
+            format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
         )
         .await
         .unwrap();
@@ -659,7 +657,8 @@ async fn get_raw(addr: &str, path: &str) -> String {
     let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
     stream
         .write_all(
-            format!("GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").as_bytes(),
+            format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
         )
         .await
         .unwrap();
@@ -707,9 +706,11 @@ async fn sse_streams_turn_events() {
     let (addr, link) = start_gateway(start_brain(brain.clone()).await).await;
     wait_link(&link, true).await;
     let mut sse = tokio::net::TcpStream::connect(&addr).await.unwrap();
-    sse.write_all(b"GET /api/events HTTP/1.1\r\nHost: x\r\nAccept: text/event-stream\r\n\r\n")
-        .await
-        .unwrap();
+    sse.write_all(
+        b"GET /api/events HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\n\r\n",
+    )
+    .await
+    .unwrap();
     let mut lines = BufReader::new(sse).lines();
 
     let mut ws = connect(&addr, TOKEN).await.unwrap();
