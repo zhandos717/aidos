@@ -1,13 +1,40 @@
 <!doctype html>
 <html lang="ru">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>aidos gateway</title>
-<link rel="stylesheet" href="/app.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aidos · панель</title>
+  <link rel="stylesheet" href="/app.css">
+  <script type="module" src="/app.js"></script>
 </head>
 <body>
-<main id="app"></main>
-<script type="module" src="/app.js"></script>
+  <header class="top">
+    <h1>Айдос <span class="muted">· панель колонки</span></h1>
+    <div class="status">
+      <span id="link-status" class="pill bad">мозг: нет связи</span>
+      <span id="devices-online" class="pill">колонок онлайн: 0</span>
+      <span id="reconnects" class="pill muted">переподключений: 0</span>
+    </div>
+  </header>
+
+  <section class="card">
+    <h2>Цепочка</h2>
+    <svg id="pipeline" viewBox="0 0 900 120" role="img" aria-label="Этапы обработки хода"></svg>
+  </section>
+
+  <main class="grid">
+    <section class="card" id="emulator"><h2>Эмулятор колонки</h2><p class="muted">Загрузка…</p></section>
+    <section class="card">
+      <h2>Сводка <span class="muted">(последние 100 ходов)</span></h2>
+      <table class="summary" id="summary"></table>
+      <h2>Колонки</h2>
+      <ul id="devices" class="devices"></ul>
+    </section>
+  </main>
+
+  <section class="card">
+    <h2>Ходы</h2>
+    <ol id="turns" class="turns"></ol>
+  </section>
 </body>
 </html>
