@@ -93,13 +93,21 @@ fn is_local_host(host: &str) -> bool {
     name.eq_ignore_ascii_case("localhost") || name == "127.0.0.1" || name == "::1"
 }
 
+/// A local reverse proxy (nginx, `tailscale serve`, `ssh -R`) connects from loopback with a
+/// loopback Host, so remote clients would pass the guards; proxies are recognised by their headers.
+fn is_proxied(headers: &HeaderMap) -> bool {
+    ["Forwarded", "X-Forwarded-For", "X-Real-IP"]
+        .iter()
+        .any(|name| headers.contains_key(*name))
+}
+
 async fn local_only(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request,
     next: Next,
 ) -> Response {
     let host_ok = header(req.headers(), "Host").is_some_and(is_local_host);
-    if is_loopback(&addr) && host_ok {
+    if is_loopback(&addr) && host_ok && !is_proxied(req.headers()) {
         next.run(req).await
     } else {
         StatusCode::FORBIDDEN.into_response()
@@ -199,7 +207,7 @@ async fn ws(
     let header_token = header(&headers, "Authorization").and_then(|v| v.strip_prefix("Bearer "));
     let device = match (header_token, q.get("token")) {
         (Some(t), _) => find_device(&st.cfg, t),
-        (None, Some(t)) if is_loopback(&peer) => st
+        (None, Some(t)) if is_loopback(&peer) && !is_proxied(&headers) => st
             .emulator
             .as_ref()
             .filter(|(_, emu_token)| emu_token == t)
@@ -338,6 +346,45 @@ mod tests {
             );
             let no_host = Request::get("/api/state").body(Body::empty()).unwrap();
             assert_eq!(status(LOCAL, no_host).await, StatusCode::FORBIDDEN);
+        }
+
+        #[tokio::test]
+        async fn proxied_dashboard_forbidden_from_loopback() {
+            for (name, value) in [
+                ("Forwarded", "for=203.0.113.7"),
+                ("X-Forwarded-For", "203.0.113.7"),
+                ("X-Real-IP", "203.0.113.7"),
+            ] {
+                let req = Request::get("/api/emulator")
+                    .header("Host", "127.0.0.1:8000")
+                    .header(name, value)
+                    .body(Body::empty())
+                    .unwrap();
+                assert_eq!(status(LOCAL, req).await, StatusCode::FORBIDDEN, "{name}");
+            }
+        }
+
+        #[tokio::test]
+        async fn proxied_emulator_query_token_rejected() {
+            for (name, value) in [
+                ("Forwarded", "for=203.0.113.7"),
+                ("X-Forwarded-For", "203.0.113.7"),
+                ("X-Real-IP", "203.0.113.7"),
+            ] {
+                let req = ws_req(&format!("/ws?token={EMU_TOKEN}"))
+                    .header(name, value)
+                    .body(Body::empty())
+                    .unwrap();
+                assert_eq!(status(LOCAL, req).await, StatusCode::UNAUTHORIZED, "{name}");
+            }
+        }
+
+        #[tokio::test]
+        async fn emulator_query_token_accepted_from_loopback() {
+            let req = ws_req(&format!("/ws?token={EMU_TOKEN}"))
+                .body(Body::empty())
+                .unwrap();
+            assert_ne!(status(LOCAL, req).await, StatusCode::UNAUTHORIZED);
         }
 
         #[tokio::test]
