@@ -105,6 +105,9 @@ class AIAgent:
             })
 
         _log.warning("ReAct max қадам жетті (%d)", _MAX_STEPS)
+        # raw инструмент шақыруын қамтуы мүмкін — тазалап қайтару
+        if self._registry.parse_tool_call(raw) is not None:
+            return "Кешіріңіз, сұранысты өңдеу кезінде уақыт шектімі өтті."
         return raw.strip()
 
     # ── Жүйелік prompt ────────────────────────────────────────────────────────

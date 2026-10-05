@@ -26,7 +26,7 @@ class AidosUI(ctk.CTk):
         self._voice_input = None
         self._current_session: ChatSession | None = None
 
-        self.title("Aidos")
+        self.title("AIDOS  //  J.A.R.V.I.S")
         self.minsize(720, 500)
         self.configure(fg_color=BG)
         self._set_icon()
@@ -100,9 +100,11 @@ class AidosUI(ctk.CTk):
     def _toggle_tts(self) -> None:
         self._tts_enabled = not self._tts_enabled
         if self._tts_enabled:
-            self._chat.tts_btn.configure(text="🔊", fg_color=BLUE)
+            self._chat.tts_btn.configure(text="◉", fg_color="#003344",
+                                         text_color=BLUE, border_color=BLUE)
         else:
-            self._chat.tts_btn.configure(text="🔇", fg_color=BG3)
+            self._chat.tts_btn.configure(text="◎", fg_color=BG3,
+                                         text_color=BG4, border_color=BG3)
 
     # ── Микрофон ──────────────────────────────────────────────────────────────
 
@@ -146,17 +148,17 @@ class AidosUI(ctk.CTk):
         session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._current_session = ChatSession(session_id=session_id)
         self._chat.clear()
-        self._chat.title_label.configure(text="Жаңа чат")
+        self._chat.title_label.configure(text="//  ЖАҢА СЕАНС")
         self._chat.add_bubble(
             "Aidos",
-            "Сәлем! Мен Aidos — сіздің қазақ AI көмекшіңізмін. 👋",
+            "ЖҮЙЕ ІСКЕ ҚОСЫЛДЫ. Мен Aidos — сіздің қазақ AI көмекшіңізмін. Сұрақ қойыңыз.",
             is_user=False,
         )
 
     def _open_session(self, session: ChatSession) -> None:
         self._current_session = session
         self._chat.clear()
-        self._chat.title_label.configure(text=session.title)
+        self._chat.title_label.configure(text=f"//  {session.title}")
         for msg in session.messages:
             self._chat.add_bubble(
                 msg["sender"],
@@ -173,7 +175,7 @@ class AidosUI(ctk.CTk):
         self._chat.add_bubble("Сіз", text, is_user=True)
         if self._current_session:
             self._current_session.add("Сіз", text)
-            self._chat.title_label.configure(text=self._current_session.title)
+            self._chat.title_label.configure(text=f"//  {self._current_session.title}")
             self.after(0, self._sidebar.refresh)
 
         self._thinking = True

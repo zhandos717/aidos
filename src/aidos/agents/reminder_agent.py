@@ -14,8 +14,8 @@ logger = logging.getLogger("aidos.agent.reminder")
 _REMINDERS_FILE = DATA_DIR / "reminders.json"
 
 # Уақыт паттерндері
-_MIN_PATTERN = re.compile(r"(\d+)\s*(минут|мин)", re.IGNORECASE)
-_HOUR_PATTERN = re.compile(r"(\d+)\s*(сағат|саг)", re.IGNORECASE)
+_MIN_PATTERN = re.compile(r"(\d+)\s*(минут|мин)\w*", re.IGNORECASE)
+_HOUR_PATTERN = re.compile(r"(\d+)\s*(сағат|саг)\w*", re.IGNORECASE)
 _CLOCK_PATTERN = re.compile(r"сағат\s+(\d{1,2})(?::(\d{2}))?", re.IGNORECASE)
 
 # Тізім паттерн
@@ -58,7 +58,7 @@ def _extract_message(query: str) -> str:
     text = _HOUR_PATTERN.sub("", text)
     text = _CLOCK_PATTERN.sub("", text)
     # Стоп-сөздерді алып тастау
-    for stop in ("еске сал", "ескертіп қой", "белгіле", "хабарла", "еске"):
+    for stop in ("еске сал", "ескертіп қой", "белгіле", "хабарла", "еске", "кейін"):
         text = text.replace(stop, "")
     text = text.strip(" ,")
     return text if text else "Уақыт келді!"

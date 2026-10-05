@@ -89,9 +89,9 @@ def _build_router(ai_client, tts_callback) -> IntentRouter:
         ),
     )
     registry.register(
-        name="recall_fact",
-        description="Бұрын сақталған фактіні еске алу",
-        params={"key": "факт кілті"},
+        name="get_fact",
+        description="Бұрын сақталған деректі алу",
+        params={"key": "кілт"},
         handler=lambda key="": str(memory.get_fact(key) or "Табылмады"),
     )
     registry.register(
@@ -302,9 +302,10 @@ def main() -> None:
         console.print(f"[yellow]⚠ {AI_PROVIDER} қол жетімсіз. AI жауаптары жұмыс істемейді.[/yellow]")
 
     router = _build_router(ai_client, tts_callback)
+    _mode = ("ui" if args.ui else "wake" if args.wake else
+             "voice" if args.voice else "both" if args.both else "text")
     _log.info("Aidos іске қосылды, режим=%s, провайдер=%s, модель=%s",
-               "voice" if args.voice else ("both" if args.both else "text"),
-               AI_PROVIDER, active_model)
+               _mode, AI_PROVIDER, active_model)
 
     try:
         if args.ui:

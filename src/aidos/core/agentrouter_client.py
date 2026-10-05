@@ -1,14 +1,12 @@
 """AgentRouter клиенті — OpenAI-compatible API арқылы GPT-5, DeepSeek және т.б."""
 
 import logging
-import os
 
+from aidos.core.config import AGENTROUTER_API_KEY, AGENTROUTER_MODEL
 from aidos.core.ollama_client import SYSTEM_PROMPT
 
 logger = logging.getLogger("aidos.agentrouter")
 
-AGENTROUTER_API_KEY: str = os.getenv("AGENTROUTER_API_KEY", "")
-AGENTROUTER_MODEL: str = os.getenv("AGENTROUTER_MODEL", "gpt-5")
 AGENTROUTER_BASE_URL = "https://agentrouter.org/v1"
 
 

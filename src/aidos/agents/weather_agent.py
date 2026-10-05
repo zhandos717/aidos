@@ -16,6 +16,12 @@ _CITY_PATTERNS = [
     re.compile(r"(\w+)\s+(?:қаласы|қалада|ауа\s*райы)", re.IGNORECASE),
 ]
 
+# Қазақ септік жалғаулары — қала атауынан алып тастайды
+_KK_SUFFIX = re.compile(
+    r"(дағы|дегі|тағы|тегі|ның|нің|дың|дің|тың|тің|дан|ден|тан|тен|нан|нен|да|де|та|те|ға|ге|қа|ке|ды|ді|ты|ті)$",
+    re.IGNORECASE,
+)
+
 _DESC_KK: dict[str, str] = {
     "Sunny": "Күнгей",
     "Clear": "Ашық",
@@ -39,7 +45,7 @@ def _extract_city(query: str) -> str:
     for pattern in _CITY_PATTERNS:
         match = pattern.search(query)
         if match:
-            city = match.group(1)
+            city = _KK_SUFFIX.sub("", match.group(1)).strip()
             logger.debug("Query-дан қала табылды: '%s'", city)
             return city
     logger.debug("Қала табылмады, әдепкі: '%s'", DEFAULT_CITY)
