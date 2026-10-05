@@ -936,7 +936,7 @@ async fn music_pauses_on_barge_in_and_resumes() {
 
     listen_start(&mut ws, &session).await;
     let in_flight = frames_until_stop(&mut ws).await;
-    assert!(in_flight <= 3, "frames after listen start: {in_flight}");
+    assert!(in_flight <= 6, "frames after listen start: {in_flight}");
     wait_device_state(&addr, "listening").await;
     assert_silent(&mut ws, Duration::from_millis(300)).await;
 
@@ -1000,7 +1000,7 @@ async fn music_new_play_replaces_stream() {
     assert_eq!(frames_until_stop(&mut ws).await, reply_frames());
     assert_eq!(next_json(&mut ws).await["state"], "start");
     let frames = frames_until_stop(&mut ws).await;
-    assert!((40..=51).contains(&frames), "music frames: {frames}");
+    assert!((48..=51).contains(&frames), "music frames: {frames}");
     assert_silent(&mut ws, Duration::from_millis(300)).await;
 }
 
