@@ -5,17 +5,20 @@ use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
+use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 
 use crate::audio::{self, DownEncoder, UpDecoder};
 use crate::link::{LinkHandle, event_turn_id};
 use crate::metrics::{MetricsHub, TurnStatus};
+use crate::music::MusicStream;
 use crate::pb;
 use crate::pb::brain_event::Kind;
 use crate::vad::{Endpointer, SegmenterParams, SileroVad};
 use crate::xiaozhi::{self, DeviceMsg, ListenState};
 
 const LEAD_FRAMES: u32 = 2;
+const MUSIC_AHEAD: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum State {
@@ -23,6 +26,7 @@ enum State {
     Listening,
     Thinking,
     Speaking,
+    Music,
 }
 
 impl State {
@@ -32,6 +36,7 @@ impl State {
             State::Listening => "listening",
             State::Thinking => "thinking",
             State::Speaking => "speaking",
+            State::Music => "music",
         }
     }
 }
@@ -55,6 +60,50 @@ struct Session {
     encoder: DownEncoder,
     endpointer: Endpointer<SileroVad>,
     hub: Arc<MetricsHub>,
+    music: Option<Music>,
+    pending_music: Option<(String, String)>,
+    music_paused_for_turn: bool,
+    music_user_paused: bool,
+}
+
+type MusicFrame = std::io::Result<Vec<i16>>;
+
+/// ffmpeg is read by its own task so that `next_frame` (not cancel-safe) never races the
+/// session's select loop. Dropping `frames` makes the task kill and reap ffmpeg.
+struct Music {
+    title: String,
+    frames: mpsc::Receiver<MusicFrame>,
+}
+
+impl Music {
+    fn spawn(url: &str, title: &str) -> std::io::Result<Music> {
+        let stream = MusicStream::spawn(url, title)?;
+        let (tx, frames) = mpsc::channel(MUSIC_AHEAD);
+        tokio::spawn(pump_music(stream, tx));
+        Ok(Music {
+            title: title.to_string(),
+            frames,
+        })
+    }
+}
+
+async fn pump_music(mut stream: MusicStream, tx: mpsc::Sender<MusicFrame>) {
+    loop {
+        let frame = tokio::select! {
+            _ = tx.closed() => break,
+            frame = stream.next_frame() => frame,
+        };
+        let item = match frame {
+            Ok(Some(pcm)) => Ok(pcm),
+            Ok(None) => break,
+            Err(err) => Err(err),
+        };
+        let failed = item.is_err();
+        if tx.send(item).await.is_err() || failed {
+            break;
+        }
+    }
+    stream.stop().await;
 }
 
 pub async fn run_device(
@@ -98,6 +147,10 @@ impl Session {
             encoder: DownEncoder::new()?,
             endpointer: Endpointer::new(SileroVad::load(silero_model)?, SegmenterParams::default()),
             hub,
+            music: None,
+            pending_music: None,
+            music_paused_for_turn: false,
+            music_user_paused: false,
         })
     }
 
@@ -130,9 +183,15 @@ impl Session {
                     Some(ev) => self.on_brain(ev),
                     None => break,
                 },
+                frame = recv_music(&mut self.music), if self.wants_music_frame() => {
+                    self.on_music_frame(frame);
+                }
                 _ = tick.tick() => {
                     self.budget = (self.budget + 1).min(LEAD_FRAMES + 1);
                     self.check_link();
+                    if self.state == State::Idle && self.queue.is_empty() {
+                        self.start_music();
+                    }
                 }
             }
             if self.flush(&mut tx).await.is_err() {
@@ -140,6 +199,7 @@ impl Session {
             }
         }
 
+        self.music = None;
         if let Some(turn_id) = self.turn_id.take() {
             self.hub.turn_end(&turn_id, TurnStatus::Aborted, None);
             self.send_abort(turn_id);
@@ -168,12 +228,17 @@ impl Session {
                 Out::Stop => {
                     tx.send(Message::Text(xiaozhi::tts_stop(&self.session_id).into()))
                         .await?;
-                    // После barge-in через listen start колонка уже слушает — не сбрасываем её в Idle.
-                    if matches!(self.state, State::Thinking | State::Speaking) {
-                        self.set_state(State::Idle);
-                    }
                     self.turn_id = None;
                     self.tts_started = false;
+                    // После barge-in через listen start колонка уже слушает — не сбрасываем её в Idle.
+                    match self.state {
+                        State::Thinking | State::Speaking => {
+                            self.set_state(State::Idle);
+                            self.start_music();
+                        }
+                        State::Music => self.set_state(State::Idle),
+                        State::Idle | State::Listening => {}
+                    }
                 }
             }
         }
@@ -254,6 +319,10 @@ impl Session {
     }
 
     fn interrupt(&mut self) {
+        if self.state == State::Music {
+            self.pause_music();
+            return;
+        }
         if !matches!(self.state, State::Thinking | State::Speaking) {
             return;
         }
@@ -368,13 +437,98 @@ impl Session {
                 self.start_tts();
                 self.queue.push_back(Out::Stop);
             }
-            Some(Kind::Action(_)) | Some(Kind::Push(_)) | None => {
-                tracing::debug!(
-                    device_id = self.device_id,
-                    "action/push ignored until M4/M5"
-                );
+            Some(Kind::Action(action)) => self.on_action(action),
+            Some(Kind::Push(_)) | None => {
+                tracing::debug!(device_id = self.device_id, "push ignored until M4");
             }
         }
+    }
+
+    fn on_action(&mut self, action: pb::Action) {
+        use pb::action::Kind as A;
+        match action.kind {
+            Some(A::Play(p)) => {
+                tracing::info!(device_id = self.device_id, title = p.title, "music queued");
+                self.music = None;
+                self.pending_music = Some((p.url, p.title));
+                self.music_user_paused = false;
+            }
+            Some(A::Stop(_)) => {
+                self.music = None;
+                self.pending_music = None;
+                self.music_paused_for_turn = false;
+                self.music_user_paused = false;
+            }
+            Some(A::Pause(_)) => self.music_user_paused = true,
+            Some(A::Resume(_)) => self.music_user_paused = false,
+            None => {}
+        }
+    }
+
+    /// Starts queued music or resumes music paused by a turn; the caller ensures
+    /// the device is idle with nothing left to play.
+    fn start_music(&mut self) {
+        if let Some((url, title)) = self.pending_music.take() {
+            match Music::spawn(&url, &title) {
+                Ok(music) => {
+                    tracing::info!(device_id = self.device_id, title, "music started");
+                    self.music = Some(music);
+                }
+                Err(err) => {
+                    tracing::error!(%err, device_id = self.device_id, url, "cannot start music");
+                    return;
+                }
+            }
+        } else if self.music.is_none() || !self.music_paused_for_turn || self.music_user_paused {
+            return;
+        }
+        self.music_paused_for_turn = false;
+        self.start_tts();
+        self.set_state(State::Music);
+    }
+
+    fn pause_music(&mut self) {
+        self.music_paused_for_turn = true;
+        self.queue.retain(|out| !matches!(out, Out::Audio(_)));
+        if !matches!(self.queue.back(), Some(Out::Stop)) {
+            self.queue.push_back(Out::Stop);
+        }
+    }
+
+    fn wants_music_frame(&self) -> bool {
+        self.state == State::Music
+            && !self.music_user_paused
+            && self.music.is_some()
+            && self
+                .queue
+                .iter()
+                .filter(|out| matches!(out, Out::Audio(_)))
+                .count()
+                < MUSIC_AHEAD
+    }
+
+    fn on_music_frame(&mut self, frame: Option<MusicFrame>) {
+        let title = || {
+            self.music
+                .as_ref()
+                .map(|m| m.title.clone())
+                .unwrap_or_default()
+        };
+        match frame
+            .map(|f| f.and_then(|pcm| self.encoder.encode_all(&pcm).map_err(std::io::Error::other)))
+        {
+            Some(Ok(packets)) => {
+                self.queue.extend(packets.into_iter().map(Out::Audio));
+                return;
+            }
+            Some(Err(err)) => {
+                tracing::warn!(%err, device_id = self.device_id, title = title(), "music failed")
+            }
+            None => tracing::info!(device_id = self.device_id, title = title(), "music ended"),
+        }
+        self.music = None;
+        self.music_paused_for_turn = false;
+        self.queue.push_back(Out::Stop);
     }
 
     fn start_tts(&mut self) {
@@ -393,6 +547,13 @@ impl Session {
                 turn_id,
             })),
         });
+    }
+}
+
+async fn recv_music(music: &mut Option<Music>) -> Option<MusicFrame> {
+    match music {
+        Some(m) => m.frames.recv().await,
+        None => std::future::pending().await,
     }
 }
 

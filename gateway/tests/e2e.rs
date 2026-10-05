@@ -27,6 +27,8 @@ struct FakeBrain {
     states: Arc<Mutex<Vec<(String, bool)>>>,
     hold_first: bool,
     zero_rate_chunk: bool,
+    music_url: Option<String>,
+    stop_on_turn: Option<usize>,
     kill: Arc<tokio::sync::Notify>,
 }
 
@@ -55,11 +57,12 @@ impl pb::brain_server::Brain for FakeBrain {
                 };
                 match ev.kind {
                     Some(pb::gateway_event::Kind::Utterance(u)) => {
-                        let first = {
+                        let turn_no = {
                             let mut utterances = me.utterances.lock().unwrap();
                             utterances.push(u.pcm_s16le.len() / 2);
-                            utterances.len() == 1
+                            utterances.len()
                         };
+                        let first = turn_no == 1;
                         let ids = (u.device_id.clone(), u.turn_id.clone());
                         let send = |kind| tx.send(Ok(pb::BrainEvent { kind: Some(kind) }));
                         let _ = send(Kind::Transcript(pb::Transcript {
@@ -89,6 +92,24 @@ impl pb::brain_server::Brain for FakeBrain {
                         .await;
                         if me.hold_first && first {
                             continue;
+                        }
+                        let action = if me.stop_on_turn == Some(turn_no) {
+                            Some(pb::action::Kind::Stop(pb::Empty {}))
+                        } else {
+                            me.music_url.clone().map(|url| {
+                                pb::action::Kind::Play(pb::PlayStream {
+                                    url,
+                                    title: "Test".into(),
+                                })
+                            })
+                        };
+                        if let Some(kind) = action {
+                            let _ = send(Kind::Action(pb::Action {
+                                device_id: ids.0.clone(),
+                                turn_id: ids.1.clone(),
+                                kind: Some(kind),
+                            }))
+                            .await;
                         }
                         let _ = send(Kind::End(pb::TurnEnd {
                             device_id: ids.0,
@@ -805,4 +826,219 @@ async fn sse_streams_turn_events() {
         pos("turn_started") < pos("transcript") && pos("transcript") < pos("turn_end"),
         "{kinds:?}"
     );
+}
+
+fn music_fixture() -> Option<String> {
+    let bin = std::env::var("FFMPEG").unwrap_or_else(|_| "ffmpeg".to_string());
+    let ok = std::process::Command::new(bin)
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !ok {
+        eprintln!("ffmpeg not found, skipping");
+        return None;
+    }
+    Some(format!(
+        "{}/tests/fixtures/speech_16k.wav",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+}
+
+async fn music_session(brain: FakeBrain) -> (String, Ws, String) {
+    let (addr, link) = start_gateway(start_brain(brain).await).await;
+    wait_link(&link, true).await;
+    let mut ws = connect(&addr, TOKEN).await.unwrap();
+    let session = hello(&mut ws).await;
+    speak(&mut ws, &session).await;
+    assert_eq!(next_json(&mut ws).await["type"], "stt");
+    assert_eq!(next_json(&mut ws).await["state"], "start");
+    assert_eq!(next_json(&mut ws).await["state"], "sentence_start");
+    assert_eq!(frames_until_stop(&mut ws).await, reply_frames());
+    let music = next_json(&mut ws).await;
+    assert_eq!(
+        (music["type"].as_str(), music["state"].as_str()),
+        (Some("tts"), Some("start"))
+    );
+    (addr, ws, session)
+}
+
+async fn take_frames(ws: &mut Ws, n: usize) {
+    for _ in 0..n {
+        match tokio::time::timeout(Duration::from_secs(5), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+        {
+            Message::Binary(_) => {}
+            other => panic!("expected a music frame, got {other:?}"),
+        }
+    }
+}
+
+async fn device_state(addr: &str) -> String {
+    get_json(addr, "/api/state").await["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["device_id"] == DEVICE)
+        .map(|d| d["state"].as_str().unwrap().to_string())
+        .unwrap_or_default()
+}
+
+async fn wait_device_state(addr: &str, state: &str) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let now = device_state(addr).await;
+        if now == state {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "device state {now}, want {state}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+async fn assert_silent(ws: &mut Ws, window: Duration) {
+    if let Ok(msg) = tokio::time::timeout(window, ws.next()).await {
+        panic!("expected silence, got {msg:?}");
+    }
+}
+
+#[tokio::test]
+async fn music_plays_after_reply() {
+    let Some(url) = music_fixture() else { return };
+    let brain = FakeBrain {
+        music_url: Some(url),
+        ..FakeBrain::default()
+    };
+    let (addr, mut ws, _session) = music_session(brain).await;
+    wait_device_state(&addr, "music").await;
+    let frames = frames_until_stop(&mut ws).await;
+    assert!((40..=51).contains(&frames), "music frames: {frames}");
+    wait_device_state(&addr, "idle").await;
+    assert_silent(&mut ws, Duration::from_millis(300)).await;
+}
+
+#[tokio::test]
+async fn music_pauses_on_barge_in_and_resumes() {
+    let Some(url) = music_fixture() else { return };
+    let brain = FakeBrain {
+        music_url: Some(url),
+        ..FakeBrain::default()
+    };
+    let (addr, mut ws, session) = music_session(brain.clone()).await;
+    take_frames(&mut ws, 10).await;
+
+    listen_start(&mut ws, &session).await;
+    let in_flight = frames_until_stop(&mut ws).await;
+    assert!(in_flight <= 3, "frames after listen start: {in_flight}");
+    wait_device_state(&addr, "listening").await;
+    assert_silent(&mut ws, Duration::from_millis(300)).await;
+
+    ws.send(Message::Text(
+        format!(r#"{{"session_id":"{session}","type":"listen","state":"stop"}}"#).into(),
+    ))
+    .await
+    .unwrap();
+    for state in ["start", "stop", "start"] {
+        let v = next_json(&mut ws).await;
+        assert_eq!(
+            (v["type"].as_str(), v["state"].as_str()),
+            (Some("tts"), Some(state))
+        );
+    }
+    let resumed = frames_until_stop(&mut ws).await;
+    let total = 10 + in_flight + resumed;
+    assert!(
+        resumed >= 5 && total <= 51,
+        "resumed {resumed} frames, {total} in total: music restarted or lost"
+    );
+    assert_eq!(brain.utterances.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn music_stop_action_ends_stream() {
+    let Some(url) = music_fixture() else { return };
+    let brain = FakeBrain {
+        music_url: Some(url),
+        stop_on_turn: Some(2),
+        ..FakeBrain::default()
+    };
+    let (addr, mut ws, session) = music_session(brain).await;
+    take_frames(&mut ws, 3).await;
+
+    speak(&mut ws, &session).await;
+    frames_until_stop(&mut ws).await;
+    assert_eq!(next_json(&mut ws).await["type"], "stt");
+    assert_eq!(next_json(&mut ws).await["state"], "start");
+    assert_eq!(next_json(&mut ws).await["state"], "sentence_start");
+    assert_eq!(frames_until_stop(&mut ws).await, reply_frames());
+    assert_silent(&mut ws, Duration::from_millis(500)).await;
+    wait_device_state(&addr, "idle").await;
+}
+
+#[tokio::test]
+async fn music_new_play_replaces_stream() {
+    let Some(url) = music_fixture() else { return };
+    let brain = FakeBrain {
+        music_url: Some(url),
+        ..FakeBrain::default()
+    };
+    let (_addr, mut ws, session) = music_session(brain).await;
+    take_frames(&mut ws, 5).await;
+
+    speak(&mut ws, &session).await;
+    frames_until_stop(&mut ws).await;
+    assert_eq!(next_json(&mut ws).await["type"], "stt");
+    assert_eq!(next_json(&mut ws).await["state"], "start");
+    assert_eq!(next_json(&mut ws).await["state"], "sentence_start");
+    assert_eq!(frames_until_stop(&mut ws).await, reply_frames());
+    assert_eq!(next_json(&mut ws).await["state"], "start");
+    let frames = frames_until_stop(&mut ws).await;
+    assert!((40..=51).contains(&frames), "music frames: {frames}");
+    assert_silent(&mut ws, Duration::from_millis(300)).await;
+}
+
+fn ffmpeg_running(marker: &str) -> bool {
+    std::process::Command::new("pgrep")
+        .args(["-f", marker])
+        .stdout(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+#[tokio::test]
+async fn music_ffmpeg_killed_on_disconnect() {
+    let Some(fixture) = music_fixture() else {
+        return;
+    };
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let marker = format!("aidos-music-{}-{nanos}", std::process::id());
+    let link_path = std::env::temp_dir().join(format!("{marker}.wav"));
+    let _ = std::fs::remove_file(&link_path);
+    std::os::unix::fs::symlink(&fixture, &link_path).unwrap();
+    let brain = FakeBrain {
+        music_url: Some(link_path.to_string_lossy().into_owned()),
+        ..FakeBrain::default()
+    };
+    let (_addr, mut ws, _session) = music_session(brain).await;
+    take_frames(&mut ws, 2).await;
+    assert!(ffmpeg_running(&marker), "ffmpeg not running during music");
+
+    let _ = ws.close(None).await;
+    while ws.next().await.is_some() {}
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while ffmpeg_running(&marker) {
+        assert!(Instant::now() < deadline, "ffmpeg survived the disconnect");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let _ = std::fs::remove_file(&link_path);
 }
