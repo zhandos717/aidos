@@ -9,6 +9,7 @@ from pathlib import Path
 _VIDEO_ID_RE = re.compile(r'^[A-Za-z0-9_-]{11}$')
 
 from aidos.core.config import MUSIC_DIR
+from aidos.core.device_ctx import current_device, emit_action
 
 logger = logging.getLogger("aidos.agent.music")
 
@@ -85,6 +86,9 @@ class MusicAgent:
         command = _detect_command(query)
         logger.info("Музыка командасы: %s", command)
 
+        if current_device.get() is not None:
+            return self._handle_on_device(command, query)
+
         if command == "stop":
             return self._stop()
         if command == "pause":
@@ -94,6 +98,23 @@ class MusicAgent:
 
         search_query = _extract_search_query(query)
         return self._stream_youtube(search_query)
+
+    def _handle_on_device(self, command: str, query: str) -> str:
+        if command == "stop":
+            emit_action("stop")
+            return "Музыка тоқтатылды."
+        if command == "pause":
+            emit_action("pause")
+            return "Музыка кідіртілді."
+        if command == "resume":
+            emit_action("resume")
+            return "Музыка жалғастырылды."
+        result = _get_stream_url(_extract_search_query(query))
+        if not result:
+            return "Музыка табылмады."
+        url, title = result
+        emit_action("play", url, title)
+        return f"Ойнатылуда: {title}"
 
     def _stream_youtube(self, search_query: str) -> str:
         self._stop()

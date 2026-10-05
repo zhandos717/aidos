@@ -12,7 +12,7 @@ import numpy as np
 
 from aidos.brain.gen import link_pb2
 from aidos.brain.sentences import split_sentences
-from aidos.core.device_ctx import current_device
+from aidos.core.device_ctx import DeviceAction, current_device, turn_actions
 from aidos.core.speech_text import clean_for_speech
 
 _log = logging.getLogger("aidos.brain.turn")
@@ -50,6 +50,8 @@ class TurnRunner:
             return
         yield link_pb2.BrainEvent(transcript=link_pb2.Transcript(text=text, **ids))
 
+        actions: list[DeviceAction] = []
+        turn_actions.set(actions)
         started = time.perf_counter()
         try:
             reply = await asyncio.to_thread(self.respond, text)
@@ -78,6 +80,8 @@ class TurnRunner:
                 speech=link_pb2.SpeechChunk(text=sentence, pcm_s16le=pcm, sample_rate=rate, **ids)
             )
         timings.tts_ms = round(tts_seconds * 1000)
+        for action in actions:
+            yield _action_event(ids, action)
         yield _end(ids, spoken == 0, timings)
 
 
@@ -87,3 +91,11 @@ def _ms_since(started: float) -> int:
 
 def _end(ids: dict[str, str], error: bool, timings: link_pb2.TurnTimings) -> link_pb2.BrainEvent:
     return link_pb2.BrainEvent(end=link_pb2.TurnEnd(error=error, timings=timings, **ids))
+
+
+def _action_event(ids: dict[str, str], action: DeviceAction) -> link_pb2.BrainEvent:
+    if action.kind == "play":
+        return link_pb2.BrainEvent(
+            action=link_pb2.Action(play=link_pb2.PlayStream(url=action.url, title=action.title), **ids)
+        )
+    return link_pb2.BrainEvent(action=link_pb2.Action(**{action.kind: link_pb2.Empty()}, **ids))

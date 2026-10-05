@@ -4,7 +4,7 @@ import numpy as np
 
 from aidos.brain.gen import link_pb2
 from aidos.brain.turn import TurnRunner
-from aidos.core.device_ctx import current_device
+from aidos.core.device_ctx import current_device, emit_action
 
 
 def _utt(sample_rate=16000):
@@ -131,3 +131,29 @@ async def test_timings_on_empty_transcript():
     assert end.error is True
     assert end.timings.stt_ms >= 20
     assert (end.timings.llm_ms, end.timings.tts_ms) == (0, 0)
+
+
+async def test_device_action_is_sent_after_speech():
+    def respond(text):
+        emit_action("play", "https://x/a", "Song")
+        return "Ойнатылуда: Song."
+
+    events = await _collect(TurnRunner(lambda a: "ойна", respond, _synth), _utt())
+    kinds = [e.WhichOneof("kind") for e in events]
+    assert kinds == ["transcript", "speech", "action", "end"]
+    assert events[-2].action.play.url == "https://x/a"
+    assert events[-2].action.play.title == "Song"
+    assert events[-2].action.device_id == "box-1"
+    assert events[-2].action.turn_id == "t1"
+
+
+async def test_stop_action_without_speech_keeps_error_flag():
+    def respond(text):
+        emit_action("stop")
+        return "Музыка тоқтатылды."
+
+    events = await _collect(TurnRunner(lambda a: "тоқтат", respond, lambda s: None), _utt())
+    kinds = [e.WhichOneof("kind") for e in events]
+    assert kinds == ["transcript", "action", "end"]
+    assert events[1].action.WhichOneof("kind") == "stop"
+    assert events[-1].end.error is True
