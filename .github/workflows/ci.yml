@@ -28,7 +28,7 @@ jobs:
         working-directory: gateway
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libopus-dev pkg-config
+      - run: sudo apt-get update && sudo apt-get install -y libopus-dev pkg-config ffmpeg
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
