@@ -138,6 +138,7 @@ export function initEmulator(root) {
     ws.onclose = () => { held = false; recording = false; talk.disabled = true; talk.classList.remove("down"); status("Соединение закрыто — обновите страницу.", "note"); };
     ws.onmessage = (m) => {
       if (typeof m.data !== "string") {
+        if (recording) return;
         if (decoder.state === "closed") makeDecoder();
         try {
           decoder.decode(new EncodedAudioChunk({ type: "key", timestamp: downTs, data: new Uint8Array(m.data) }));
@@ -149,6 +150,7 @@ export function initEmulator(root) {
       try { msg = JSON.parse(m.data); } catch { return; }
       if (msg.type === "hello") { session = msg.session_id ?? ""; talk.disabled = false; status(READY); }
       else if (msg.type === "stt") { say("Сіз", msg.text); status("Думаю…"); }
+      else if (msg.type === "tts" && msg.state === "start" && !recording && statusEl.textContent === READY) status("Играет музыка ♪");
       else if (msg.type === "tts" && msg.state === "sentence_start") { say("Айдос", msg.text); status("Говорю…"); }
       else if (msg.type === "tts" && msg.state === "stop" && !recording) status(READY);
     };

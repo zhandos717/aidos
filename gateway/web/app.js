@@ -6,7 +6,7 @@ const STAGES = [
   { id: "tts", label: "🔊 TTS" },
   { id: "out", label: "🎧 Ответ" },
 ];
-const STATE_RU = { idle: "ожидание", listening: "слушает", thinking: "думает", speaking: "говорит" };
+const STATE_RU = { idle: "ожидание", listening: "слушает", thinking: "думает", speaking: "говорит", music: "играет музыку" };
 const STATUS_RU = { active: "идёт", ok: "ok", error: "ошибка", aborted: "прерван" };
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
