@@ -37,7 +37,8 @@ def _parse_md_frontmatter(text: str) -> tuple[dict, str]:
             current_key = None
             for line in fm_text.splitlines():
                 if line.startswith("  - "):          # list item
-                    meta.setdefault(current_key, []).append(line[4:].strip())
+                    if current_key is not None:
+                        meta.setdefault(current_key, []).append(line[4:].strip())
                 elif ":" in line:
                     key, _, val = line.partition(":")
                     current_key = key.strip()

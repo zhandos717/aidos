@@ -1,0 +1,616 @@
+<!doctype html>
+<html lang="kk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aidos</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --void: #04050A;
+    --deep: #0A0D18;
+    --glass: rgba(18, 24, 46, 0.9);
+    --glass-hi: rgba(34, 44, 80, 0.55);
+    --edge: rgba(140, 170, 255, 0.14);
+    --edge-hi: rgba(140, 170, 255, 0.28);
+    --plasma: #3CE6FF;
+    --ion: #8B5CFF;
+    --pulse: #FF4FD8;
+    --solar: #FFB13D;
+    --text: #E8EEFF;
+    --dim: #8A95BC;
+    --faint: #7C86AD;
+    --state: var(--plasma);
+    /* Unbounded — тек латын логотипке: онда қазақ әріптері жоқ */
+    --brand: "Unbounded", "SF Pro Display", system-ui, sans-serif;
+    --display: "SF Pro Display", system-ui, -apple-system, sans-serif;
+    --body: "SF Pro Text", system-ui, -apple-system, sans-serif;
+    --orb: min(400px, 44vh);
+    --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  }
+  body[data-state="listening"] { --state: var(--pulse); }
+  body[data-state="thinking"]  { --state: var(--solar); }
+  body[data-state="speaking"]  { --state: var(--plasma); }
+
+  * { box-sizing: border-box; margin: 0; }
+  button, input, select { font: inherit; color: inherit; }
+  html, body { height: 100%; }
+  body {
+    background: var(--void);
+    color: var(--text);
+    font: 15px/1.6 var(--body);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+  #bg { position: fixed; inset: 0; z-index: 0; }
+
+  .app { position: relative; z-index: 1; display: grid; grid-template-columns: 264px 1fr; height: 100%; }
+
+  /* ── Rail ─────────────────────────────────────────── */
+  .rail {
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 22px 14px 16px;
+    background: linear-gradient(180deg, rgba(14, 18, 36, 0.94), rgba(8, 10, 22, 0.92));
+    border-right: 1px solid var(--edge);
+  }
+  .brand { display: flex; align-items: center; gap: 12px; padding: 0 8px 20px; }
+  .brand canvas { width: 30px; height: 30px; }
+  .brand b { font: 700 17px/1 var(--brand); letter-spacing: 0.18em; }
+  .new {
+    display: flex; align-items: center; gap: 10px;
+    height: 42px; padding: 0 14px; border-radius: 12px;
+    background: var(--glass-hi); border: 1px solid var(--edge);
+    color: var(--text); font: 600 13px var(--body); cursor: pointer;
+    transition: border-color .2s;
+  }
+  .new:hover { border-color: rgba(60, 230, 255, .5); }
+  .new span { color: var(--plasma); font-size: 18px; line-height: 1; }
+  .rail-h { font: 400 12px var(--body); color: var(--faint); padding: 18px 10px 6px; }
+  .history { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding-right: 2px; }
+  .history button {
+    text-align: left; border: 0; background: transparent; color: var(--dim);
+    font: 400 13px var(--body); padding: 8px 10px; border-radius: 10px; cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; position: relative;
+  }
+  .history button:hover { background: rgba(140, 170, 255, .07); color: var(--text); }
+  .history button.active { color: var(--text); background: rgba(60, 230, 255, .12); }
+  .rail-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 6px 0; border-top: 1px solid var(--edge); }
+  .telemetry { font: 400 12px var(--body); color: var(--faint); line-height: 1.5; overflow: hidden; }
+  .telemetry i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #45F0A6; margin-right: 6px; font-style: normal; }
+  .mono { font-family: var(--mono); }
+  .ghost {
+    border: 1px solid var(--edge); background: transparent; color: var(--dim);
+    font: 400 13px var(--body); padding: 7px 12px; border-radius: 10px; cursor: pointer;
+  }
+  .ghost:hover { color: var(--text); border-color: var(--edge-hi); }
+
+  /* ── Main ─────────────────────────────────────────── */
+  main { position: relative; display: grid; grid-template-rows: 64px 1fr auto; min-width: 0; }
+  header { display: flex; align-items: center; gap: 14px; padding: 0 28px; }
+  header h1 { font: 600 15px var(--body); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px;
+    border-radius: 15px; border: 1px solid var(--edge); background: var(--glass);
+    font: 400 12px var(--body); color: var(--dim); transition: color .3s, border-color .3s;
+  }
+  .chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--state); }
+  body:not([data-state="idle"]) .chip { color: var(--text); border-color: color-mix(in srgb, var(--state) 45%, transparent); }
+  body:not([data-state="idle"]) .chip .dot { animation: blink 1s ease-in-out infinite; }
+  @keyframes blink { 50% { opacity: .35; } }
+  .chip.btn { cursor: pointer; }
+  .chip.btn.off { color: var(--faint); }
+  .chip.btn.off .dot { background: var(--faint); box-shadow: none; }
+
+  /* ── Orb stage ────────────────────────────────────── */
+  #orb {
+    position: absolute; left: 50%; top: calc(64px + 2vh); width: var(--orb); height: var(--orb);
+    transform: translateX(-50%);
+    transition: top .9s cubic-bezier(.2,.8,.2,1), width .9s cubic-bezier(.2,.8,.2,1), height .9s cubic-bezier(.2,.8,.2,1), opacity .6s;
+    pointer-events: none; z-index: 0;
+  }
+  body.chatting #orb { top: 6px; width: 140px; height: 140px; opacity: .9; }
+
+  .welcome {
+    position: absolute; inset: 64px 0 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+    padding: calc(2vh + var(--orb) - 10px) 24px 0; text-align: center; gap: 12px; transition: opacity .25s, transform .3s;
+  }
+  body.chatting .welcome { opacity: 0; transform: translateY(20px); pointer-events: none; }
+  .welcome h2 {
+    font: 700 clamp(26px, 4.2vh, 38px)/1.15 var(--display); letter-spacing: -0.02em;
+    color: var(--text);
+  }
+  .welcome p { color: var(--dim); max-width: 46ch; }
+  .suggest { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; width: min(560px, 100%); margin-top: 10px; }
+  .suggest button {
+    border: 1px solid var(--edge); background: rgba(18,24,46,.85); color: var(--text);
+    font: 400 13px var(--body); padding: 10px 16px; border-radius: 14px; cursor: pointer;
+    transition: border-color .2s, background .2s;
+  }
+  .suggest button:hover { border-color: rgba(60,230,255,.45); background: rgba(34,44,80,.9); }
+
+  /* ── Messages ─────────────────────────────────────── */
+  .scroll { overflow-y: auto; padding: 120px 0 24px; opacity: 0; transition: opacity .5s .2s; mask-image: linear-gradient(transparent 0, #000 140px); }
+  body.chatting .scroll { opacity: 1; }
+  .thread { max-width: 760px; margin: 0 auto; padding: 0 32px; display: flex; flex-direction: column; gap: 22px; }
+  .msg { animation: rise .45s cubic-bezier(.2,.8,.2,1) both; user-select: text; }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); filter: blur(4px); } }
+  .msg.user {
+    align-self: flex-end; max-width: 72%;
+    background: #141A33;
+    border: 1px solid rgba(140,170,255,.22); padding: 11px 16px; border-radius: 18px 18px 6px 18px;
+  }
+  .msg.ai { font-size: 16px; line-height: 1.7; color: #DCE4FF; max-width: 64ch; }
+  .msg.ai .chunk { animation: materialize .15s ease-out both; }
+  @keyframes materialize { from { opacity: 0; } }
+  .msg.ai.live::after {
+    content: ""; display: inline-block; width: 8px; height: 17px; margin-left: 3px; vertical-align: -3px;
+    background: var(--plasma); animation: blink .8s steps(2) infinite;
+  }
+  .thinking {
+    font: 400 13px var(--body);
+    background: linear-gradient(90deg, var(--faint) 0%, var(--solar) 45%, #FFF3D6 50%, var(--solar) 55%, var(--faint) 100%);
+    background-size: 220% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
+    animation: shimmer 1.6s linear infinite;
+  }
+  @keyframes shimmer { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+
+  /* ── Composer ─────────────────────────────────────── */
+  .dock { padding: 8px 32px 18px; }
+  .composer {
+    position: relative; max-width: 760px; margin: 0 auto; display: flex; align-items: center; gap: 8px;
+    padding: 8px 8px 8px 22px; border-radius: 22px;
+    background: rgba(12, 16, 32, .94); border: 1px solid var(--edge);
+    box-shadow: 0 20px 60px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.04);
+  }
+  @property --a { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+  .composer::before {
+    content: ""; position: absolute; inset: -1px; border-radius: 23px; padding: 1px; pointer-events: none;
+    background: conic-gradient(from var(--a), transparent 0 55%, var(--state) 75%, #fff 80%, var(--ion) 88%, transparent 100%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    opacity: 0; transition: opacity .4s; animation: spin 2.4s linear infinite;
+  }
+  body:not([data-state="idle"]) .composer::before { opacity: 1; }
+  .composer:focus-within { border-color: var(--plasma); }
+  @keyframes spin { to { --a: 360deg; } }
+  .composer input {
+    flex: 1; min-width: 0; height: 44px; border: 0; outline: 0; background: transparent;
+    color: var(--text); font: 400 15px var(--body);
+  }
+  .composer input::placeholder { color: var(--faint); }
+  .round {
+    width: 44px; height: 44px; border-radius: 14px; border: 1px solid var(--edge); cursor: pointer;
+    display: grid; place-items: center; background: rgba(140,170,255,.06); color: var(--text);
+    transition: background .2s, box-shadow .2s, transform .15s;
+  }
+  .round:hover { background: rgba(140,170,255,.12); }
+  .round:active { transform: scale(.97); }
+  .round svg { width: 20px; height: 20px; }
+  .send { background: linear-gradient(135deg, var(--plasma), var(--ion)); border: 0; color: #06101A; }
+  .send:hover { background: linear-gradient(135deg, #7CF0FF, #A585FF); }
+  .send:disabled { opacity: .35; cursor: default; }
+  body[data-state="listening"] .send { opacity: .35; pointer-events: none; }
+  .send.stop { background: rgba(140,170,255,.14); color: var(--text); border: 1px solid var(--edge-hi); }
+  .send.stop:hover { background: rgba(255,120,120,.18); }
+  body[data-state="listening"] .mic { background: var(--pulse); color: #1A0216; border-color: transparent; box-shadow: 0 0 30px rgba(255,79,216,.55); }
+  .hint { max-width: 760px; margin: 8px auto 0; text-align: center; font: 400 12px var(--body); color: var(--faint); min-height: 18px; }
+  .hint.warn { color: var(--solar); }
+
+  :focus-visible { outline: 2px solid var(--plasma); outline-offset: 2px; }
+
+  /* ── Settings drawer ──────────────────────────────── */
+  .scrim { position: fixed; inset: 0; background: rgba(2,3,8,.5); opacity: 0; pointer-events: none; transition: opacity .3s; z-index: 5; }
+  .drawer {
+    position: fixed; top: 12px; right: 12px; bottom: 12px; width: 400px; z-index: 6;
+    display: flex; flex-direction: column; border-radius: 22px;
+    background: linear-gradient(180deg, rgba(20,26,52,.97), rgba(10,13,28,.98));
+    border: 1px solid var(--edge-hi);
+    box-shadow: 0 30px 80px rgba(0,0,0,.6);
+    transform: translateX(calc(100% + 24px)); transition: transform .45s cubic-bezier(.2,.8,.2,1);
+  }
+  body.settings-open .drawer { transform: none; }
+  body.settings-open .scrim { opacity: 1; pointer-events: auto; }
+  .drawer header { height: 64px; padding: 0 22px; }
+  .drawer header h2 { font: 600 17px var(--display); }
+  .drawer .body { flex: 1; overflow-y: auto; padding: 4px 22px 18px; display: flex; flex-direction: column; gap: 22px; }
+  .group h3 { font: 600 15px var(--body); color: var(--text); margin-bottom: 10px; }
+  .group h3 small { color: var(--faint); font: 400 12px var(--body); margin-left: 6px; }
+  .field { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .field label { color: var(--dim); font-size: 13px; }
+  select, .field input[type="text"] {
+    width: 100%; height: 38px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--edge);
+    background: rgba(140,170,255,.06); color: var(--text); font: 400 13px var(--body); outline: none;
+    -webkit-appearance: none; appearance: none;
+  }
+  select { background-image: linear-gradient(45deg, transparent 50%, var(--dim) 50%), linear-gradient(135deg, var(--dim) 50%, transparent 50%);
+           background-position: calc(100% - 17px) 16px, calc(100% - 12px) 16px; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 30px; }
+  select:focus-visible, .field input:focus-visible { outline: 2px solid var(--plasma); outline-offset: 1px; }
+  option { background: #10152A; }
+  .switch { display: flex; align-items: center; gap: 10px; color: var(--dim); font-size: 13px; cursor: pointer; margin-top: 4px; }
+  .switch input { appearance: none; -webkit-appearance: none; width: 38px; height: 22px; border-radius: 11px; background: rgba(140,170,255,.15); position: relative; cursor: pointer; transition: background .2s; }
+  .switch input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .2s; }
+  .switch input:checked { background: linear-gradient(90deg, var(--plasma), var(--ion)); }
+  .switch input:checked::after { transform: translateX(16px); }
+  .drawer footer { display: flex; align-items: center; gap: 10px; padding: 14px 22px 18px; border-top: 1px solid var(--edge); }
+  .drawer footer .msg-line { flex: 1; font-size: 12px; color: var(--dim); }
+  .drawer footer .msg-line.err { color: #FF8A8A; }
+  .primary { border: 0; border-radius: 12px; padding: 10px 18px; font: 600 13px var(--body); cursor: pointer; color: #06101A; background: linear-gradient(135deg, var(--plasma), var(--ion)); }
+
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-thumb { background: rgba(140,170,255,.12); border-radius: 4px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+    .thinking { animation: shimmer 3s linear infinite !important; }
+  }
+</style>
+</head>
+<body data-state="idle">
+<canvas id="bg"></canvas>
+
+<div class="app">
+  <aside class="rail">
+    <div class="brand"><canvas id="mini" width="60" height="60"></canvas><b>AIDOS</b></div>
+    <button class="new" id="newChat"><span>+</span> Жаңа әңгіме</button>
+    <h2 class="rail-h">Тарих</h2>
+    <nav class="history" id="history"></nav>
+    <div class="rail-foot">
+      <div class="telemetry"><i></i><span id="model" class="mono">—</span></div>
+      <button class="ghost" id="openSettings">Баптаулар</button>
+    </div>
+  </aside>
+
+  <main>
+    <header>
+      <h1 id="title">Жаңа әңгіме</h1>
+      <span class="chip"><span class="dot"></span><span id="stateText" aria-live="polite">Дайын</span></span>
+      <button class="chip btn" id="ttsToggle"><span class="dot"></span><span>Дауыс</span></button>
+    </header>
+
+    <canvas id="orb"></canvas>
+
+    <section class="welcome">
+      <h2>Сәлем! Немен көмектесейін?</h2>
+      <p>Жазыңыз немесе микрофонды басып айтыңыз. Қазақша да, орысша да түсінемін.</p>
+      <div class="suggest" id="suggest"></div>
+    </section>
+
+    <div class="scroll" id="scroll"><div class="thread" id="thread"></div></div>
+
+    <div class="dock">
+      <form class="composer" id="composer" autocomplete="off">
+        <input id="input" placeholder="Сұрағыңызды жазыңыз…" aria-label="Хабарлама">
+        <button type="button" class="round mic" id="mic" aria-label="Микрофон">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+        </button>
+        <button type="submit" class="round send" id="send" aria-label="Жіберу">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+        </button>
+      </form>
+      <div class="hint" id="hint"></div>
+    </div>
+  </main>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-label="Баптаулар" inert>
+  <header><h2>Баптаулар</h2><button class="ghost" id="closeSettings">Жабу</button></header>
+  <div class="body">
+    <div class="group">
+      <h3>Модель <small>LLM</small></h3>
+      <div class="field"><label for="s-llm">Провайдер</label><select id="s-llm"></select></div>
+      <div class="field"><label for="s-model">Модель</label><input type="text" id="s-model" list="models"><datalist id="models"></datalist></div>
+      <div class="field"><label for="s-tokens">Жауап ұзындығы</label>
+        <select id="s-tokens"><option value="150">Өте қысқа</option><option value="300">Қысқа</option><option value="600">Орташа</option><option value="1500">Ұзын</option></select></div>
+      <label class="switch"><input type="checkbox" id="s-fast"> Жылдам жауап — бір LLM сұранысы</label>
+    </div>
+    <div class="group">
+      <h3>Сөзді тану <small>STT</small></h3>
+      <div class="field"><label for="s-stt">Провайдер</label><select id="s-stt"></select></div>
+      <div class="field"><label for="s-sttlang">Тіл</label><select id="s-sttlang"></select></div>
+    </div>
+    <div class="group">
+      <h3>Дауыс <small>TTS</small></h3>
+      <div class="field"><label for="s-tts">Провайдер</label><select id="s-tts"></select></div>
+      <div class="field"><label for="s-voice">Қазақша</label><select id="s-voice"></select></div>
+      <div class="field"><label for="s-voiceru">Орысша</label><select id="s-voiceru"></select></div>
+      <div class="field"><label for="s-effect">Эффект</label><select id="s-effect"></select></div>
+      <button class="ghost" id="preview" type="button">Тыңдап көру</button>
+    </div>
+  </div>
+  <footer><span class="msg-line" id="settingsMsg"></span><button class="ghost" id="cancelSettings">Болдырмау</button><button class="primary" id="saveSettings">Сақтау</button></footer>
+</aside>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const STATE_TEXT = { idle: "Дайын", listening: "Тыңдап тұрмын", thinking: "Ойланып жатырмын", speaking: "Сөйлеп тұрмын" };
+const SUGGEST = ["Бүгін ауа райы қандай?", "Көңілді музыка қос", "10 минуттан кейін еске сал", "Расскажи что-нибудь интересное"];
+
+/* ── Background constellation ─────────────────────────── */
+(() => {
+  const c = $("bg"), g = c.getContext("2d");
+  let W, H, pts;
+  const resize = () => {
+    W = c.width = innerWidth; H = c.height = innerHeight;
+    c.style.width = innerWidth + "px"; c.style.height = innerHeight + "px";
+    pts = Array.from({ length: 60 }, () => ({ x: Math.random() * W, y: Math.random() * H, vx: (Math.random() - .5) * .15, vy: (Math.random() - .5) * .15, r: Math.random() * 1.4 + .3 }));
+  };
+  resize(); addEventListener("resize", resize);
+  const link = 140;
+  let skip = false;
+  const frame = () => {
+    skip = !skip;
+    if (skip || document.hidden) { if (!reduced) requestAnimationFrame(frame); return; }
+    g.clearRect(0, 0, W, H);
+    for (const p of pts) {
+      p.x = (p.x + p.vx + W) % W; p.y = (p.y + p.vy + H) % H;
+      g.fillStyle = "rgba(170,200,255,.55)"; g.beginPath(); g.arc(p.x, p.y, p.r, 0, 7); g.fill();
+    }
+    for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
+      const a = pts[i], b = pts[j], d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (d < link) { g.strokeStyle = `rgba(120,160,255,${(1 - d / link) * .12})`; g.lineWidth = .6; g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke(); }
+    }
+    if (!reduced) requestAnimationFrame(frame);
+  };
+  frame();
+})();
+
+/* ── Particle sphere ──────────────────────────────────── */
+function makeOrb(canvas, { count = 1100, mini = false } = {}) {
+  const CB = 6, DB = 4;
+  const buckets = Array.from({ length: CB * DB }, () => []);
+  const g = canvas.getContext("2d");
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  const pts = Array.from({ length: count }, (_, i) => {
+    const y = 1 - (i / (count - 1)) * 2, r = Math.sqrt(1 - y * y), th = golden * i;
+    return { x: Math.cos(th) * r, y, z: Math.sin(th) * r, seed: Math.random() * 6.28 };
+  });
+  const PAL = {
+    idle:      { a: [60, 230, 255],  b: [139, 92, 255], rot: .0035, amp: .02, wave: 0 },
+    listening: { a: [255, 79, 216],  b: [139, 92, 255], rot: .006,  amp: .05, wave: 1 },
+    thinking:  { a: [255, 177, 61],  b: [255, 100, 160], rot: .03,  amp: .03, wave: 0 },
+    speaking:  { a: [60, 230, 255],  b: [190, 120, 255], rot: .008, amp: .10, wave: 0 },
+  };
+  const cur = { a: [...PAL.idle.a], b: [...PAL.idle.b], rot: PAL.idle.rot, amp: PAL.idle.amp, wave: 0 };
+  let state = "idle", ax = 0, ay = 0, t = 0, level = 0, boot = 0;
+  const lerp = (x, y, k) => x + (y - x) * k;
+
+  function draw() {
+    if (document.hidden) { requestAnimationFrame(draw); return; }
+    const dpr = Math.min(devicePixelRatio, 1.5), w = canvas.clientWidth * dpr, h = canvas.clientHeight * dpr;
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    const tgt = PAL[state];
+    for (let k = 0; k < 3; k++) { cur.a[k] = lerp(cur.a[k], tgt.a[k], .05); cur.b[k] = lerp(cur.b[k], tgt.b[k], .05); }
+    cur.rot = lerp(cur.rot, tgt.rot, .04); cur.amp = lerp(cur.amp, tgt.amp, .06); cur.wave = lerp(cur.wave, tgt.wave, .06);
+    t += 1; boot = Math.min(1, boot + .012);
+    ay += cur.rot; ax = Math.sin(t * .003) * .35;
+    const target = state === "speaking" ? (.45 + .55 * Math.abs(Math.sin(t * .21) * Math.sin(t * .057))) * (0.6 + Math.random() * .4) : 0;
+    level = lerp(level, target, .25);
+
+    g.clearRect(0, 0, w, h);
+    const cx = w / 2, cy = h / 2, R = Math.min(w, h) * .33 * (1 - Math.pow(1 - boot, 3));
+    const glow = g.createRadialGradient(cx, cy, 0, cx, cy, R * 1.9);
+    glow.addColorStop(0, `rgba(${cur.a.map(Math.round)},${.22 + level * .2})`);
+    glow.addColorStop(.45, `rgba(${cur.b.map(Math.round)},.08)`);
+    glow.addColorStop(1, "rgba(0,0,0,0)");
+    g.fillStyle = glow; g.fillRect(0, 0, w, h);
+
+    g.globalCompositeOperation = "lighter";
+    const cosY = Math.cos(ay), sinY = Math.sin(ay), cosX = Math.cos(ax), sinX = Math.sin(ax);
+    const size = (mini ? 1.6 : 1.5) * dpr;
+    for (const b of buckets) b.length = 0;
+    for (const p of pts) {
+      let x = p.x * cosY - p.z * sinY, z = p.x * sinY + p.z * cosY, y = p.y * cosX - z * sinX;
+      z = p.y * sinX + z * cosX;
+      const s = 1 + Math.sin(t * .02 + p.seed) * cur.amp + cur.wave * .07 * Math.sin(t * .09 - p.y * 7)
+              + level * .22 * Math.sin(p.seed * 3 + t * .3);
+      const depth = (z + 1.6) / 2.6;
+      const ci = Math.min(CB - 1, ((p.y + 1) / 2 * CB) | 0), di = Math.min(DB - 1, (depth * DB) | 0);
+      buckets[ci * DB + di].push(cx + x * R * s, cy + y * R * s, size * (.4 + depth));
+    }
+    for (let ci = 0; ci < CB; ci++) {
+      const k = (ci + .5) / CB;
+      const col = [0, 1, 2].map(j => Math.round(cur.a[j] * (1 - k) + cur.b[j] * k));
+      for (let di = 0; di < DB; di++) {
+        const arr = buckets[ci * DB + di];
+        if (!arr.length) continue;
+        g.fillStyle = `rgba(${col},${(.15 + (di + .5) / DB * .75) * boot})`;
+        g.beginPath();
+        for (let i = 0; i < arr.length; i += 3) { g.moveTo(arr[i] + arr[i + 2], arr[i + 1]); g.arc(arr[i], arr[i + 1], arr[i + 2], 0, 6.283); }
+        g.fill();
+      }
+    }
+    if (state === "thinking" && !mini) {
+      g.strokeStyle = `rgba(${cur.a.map(Math.round)},.5)`; g.lineWidth = 1.2 * dpr;
+      for (let i = 0; i < 3; i++) {
+        g.beginPath();
+        g.ellipse(cx, cy, R * (1.25 + i * .12), R * (.32 + i * .05), t * .02 * (i % 2 ? -1 : 1) + i, t * .05, t * .05 + 2.2);
+        g.stroke();
+      }
+    }
+    g.globalCompositeOperation = "source-over";
+    if (!reduced || boot < 1) requestAnimationFrame(draw);
+  }
+  draw();
+  return { setState: (s) => { state = s; } };
+}
+const orb = makeOrb($("orb"));
+const mini = makeOrb($("mini"), { count: 260, mini: true });
+
+/* ── App state ────────────────────────────────────────── */
+let api = null, opts = null, liveEl = null, thinkingEl = null, heardTimer = null, lastFocus = null;
+const thread = $("thread"), scroll = $("scroll");
+const toBottom = () => { scroll.scrollTop = scroll.scrollHeight; };
+
+const ICON_SEND = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>';
+const ICON_STOP = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>';
+function setState(s) {
+  document.body.dataset.state = s;
+  const busy = s === "thinking" || s === "speaking", btn = $("send");
+  if (busy !== btn.classList.contains("stop")) {
+    btn.classList.toggle("stop", busy);
+    btn.innerHTML = busy ? ICON_STOP : ICON_SEND;
+    btn.setAttribute("aria-label", busy ? "Тоқтату" : "Жіберу");
+  }
+  $("stateText").textContent = STATE_TEXT[s] || "";
+  orb.setState(s); mini.setState(s);
+}
+function hint(text, warn = false) {
+  const h = $("hint"); h.textContent = text || ""; h.classList.toggle("warn", warn);
+  // Қате келесі әрекетке дейін тұрады — оны оқып үлгеру керек
+  if (text && !warn) setTimeout(() => { if (h.textContent === text) h.textContent = ""; }, 4000);
+}
+function chatting(on) { document.body.classList.toggle("chatting", on); }
+
+function addMsg(text, user) {
+  chatting(true);
+  const el = document.createElement("div");
+  el.className = "msg " + (user ? "user" : "ai");
+  el.textContent = text;
+  thread.appendChild(el); toBottom();
+  return el;
+}
+function showThinking() {
+  thinkingEl = document.createElement("div");
+  thinkingEl.className = "thinking"; thinkingEl.textContent = "Ойланып жатырмын…";
+  thread.appendChild(thinkingEl); toBottom();
+}
+function hideThinking() { if (thinkingEl) { thinkingEl.remove(); thinkingEl = null; } }
+
+function renderHistory(list, active) {
+  const nav = $("history"); nav.innerHTML = "";
+  for (const s of list) {
+    const b = document.createElement("button");
+    b.textContent = s.title; b.title = s.title;
+    if (s.id === active) { b.classList.add("active"); b.setAttribute("aria-current", "page"); }
+    b.onclick = () => openSession(s.id);
+    nav.appendChild(b);
+  }
+}
+
+async function openSession(id) {
+  const data = await api.open_session(id);
+  thread.innerHTML = ""; liveEl = null; hideThinking();
+  for (const m of data.messages) addMsg(m.text, m.user);
+  $("title").textContent = data.title;
+  [...$("history").children].forEach(b => b.classList.toggle("active", b.title === data.title));
+  chatting(data.messages.length > 0);
+}
+
+function send(text) {
+  text = (text || "").trim();
+  if (!text || document.body.dataset.state === "thinking") return;
+  hint(""); clearTimeout(heardTimer);
+  addMsg(text, true); showThinking();
+  $("input").value = "";
+  api.send(text);
+}
+
+/* ── Events from Python ───────────────────────────────── */
+window.Aidos = {
+  emit(type, data) {
+    if (type === "state") setState(data);
+    else if (type === "status") hint(data, true);
+    else if (type === "heard") {
+      // Танылған мәтін 1.2s көрінеді: түзеткісі келсе, пернені басу жіберуді тоқтатады
+      $("input").value = data; $("input").focus();
+      hint("Танылды — жіберілуде… Түзету үшін жаза бастаңыз");
+      heardTimer = setTimeout(() => send($("input").value), 1200);
+    }
+    else if (type === "delta") {
+      hideThinking();
+      if (!liveEl) { liveEl = addMsg("", false); liveEl.classList.add("live"); }
+      const span = document.createElement("span"); span.className = "chunk"; span.textContent = data;
+      liveEl.appendChild(span); toBottom();
+    }
+    else if (type === "done") {
+      hideThinking();
+      if (liveEl) { liveEl.classList.remove("live"); liveEl.textContent = data; liveEl = null; }
+      else addMsg(data, false);
+      toBottom();
+    }
+    else if (type === "sessions") { renderHistory(data.list, data.active); $("title").textContent = data.title; }
+  },
+};
+
+/* ── Settings ─────────────────────────────────────────── */
+const fill = (sel, entries, value) => {
+  sel.innerHTML = "";
+  for (const [v, label] of entries) { const o = new Option(label, v); sel.appendChild(o); }
+  sel.value = value;
+};
+function syncModels(providerId, model) {
+  const p = opts.llm.find(x => x.id === providerId);
+  $("models").innerHTML = p.models.map(m => `<option value="${m}">`).join("");
+  $("s-model").value = model || p.default;
+}
+function loadSettings(s) {
+  fill($("s-llm"), opts.llm.map(p => [p.id, p.hasKey ? p.title : `${p.title} — кілт жоқ`]), s.llm_provider);
+  syncModels(s.llm_provider, s.llm_model);
+  $("s-tokens").value = String(s.max_tokens); $("s-fast").checked = s.fast_mode;
+  fill($("s-stt"), Object.entries(opts.stt), s.stt_provider);
+  fill($("s-sttlang"), Object.entries(opts.sttLang), s.stt_language);
+  fill($("s-tts"), Object.entries(opts.tts), s.tts_provider);
+  fill($("s-voice"), Object.entries(opts.voices), s.tts_voice);
+  fill($("s-voiceru"), Object.entries(opts.voices).filter(([k]) => !k.startsWith("kk-")), s.tts_voice_ru);
+  fill($("s-effect"), Object.entries(opts.effects), s.tts_effect);
+}
+const ttsValues = () => ({ tts_provider: $("s-tts").value, tts_voice: $("s-voice").value, tts_voice_ru: $("s-voiceru").value, tts_effect: $("s-effect").value });
+const toggleSettings = (open) => {
+  document.body.classList.toggle("settings-open", open);
+  document.querySelector(".app").inert = open;
+  $("drawer").inert = !open;
+  $("settingsMsg").textContent = "";
+  if (open) { lastFocus = document.activeElement; setTimeout(() => $("s-llm").focus(), 50); }
+  else if (lastFocus) lastFocus.focus();
+};
+
+/* ── Wiring ───────────────────────────────────────────── */
+for (const s of SUGGEST) {
+  const b = document.createElement("button"); b.textContent = s; b.onclick = () => send(s); $("suggest").appendChild(b);
+}
+$("input").addEventListener("input", () => { clearTimeout(heardTimer); hint(""); });
+$("composer").addEventListener("submit", (e) => {
+  e.preventDefault();
+  if ($("send").classList.contains("stop")) { if (e.submitter === $("send")) api.stop(); return; }
+  send($("input").value);
+});
+$("mic").onclick = () => api && api.mic();
+$("newChat").onclick = async () => {
+  const r = await api.new_chat();
+  thread.innerHTML = ""; liveEl = null; hideThinking(); chatting(false);
+  $("title").textContent = "Жаңа әңгіме"; renderHistory(r.sessions, null); $("input").focus();
+};
+$("ttsToggle").onclick = async () => { const on = await api.toggle_tts(); $("ttsToggle").classList.toggle("off", !on); };
+$("openSettings").onclick = () => toggleSettings(true);
+$("closeSettings").onclick = $("cancelSettings").onclick = $("scrim").onclick = () => toggleSettings(false);
+$("s-llm").onchange = () => syncModels($("s-llm").value, "");
+$("preview").onclick = () => api.preview_voice(ttsValues());
+$("saveSettings").onclick = async () => {
+  const r = await api.save_settings({
+    llm_provider: $("s-llm").value, llm_model: $("s-model").value,
+    max_tokens: Number($("s-tokens").value), fast_mode: $("s-fast").checked,
+    stt_provider: $("s-stt").value, stt_language: $("s-sttlang").value, ...ttsValues(),
+  });
+  const m = $("settingsMsg");
+  if (r.ok) { $("model").textContent = r.model; m.className = "msg-line"; m.textContent = "Сақталды"; setTimeout(() => toggleSettings(false), 700); }
+  else { m.className = "msg-line err"; m.textContent = r.error; }
+};
+addEventListener("keydown", (e) => { if (e.key === "Escape") toggleSettings(false); });
+
+window.addEventListener("pywebviewready", async () => {
+  api = window.pywebview.api;
+  const d = await api.init();
+  opts = d.options;
+  $("model").textContent = d.model;
+  $("ttsToggle").classList.toggle("off", !d.tts);
+  renderHistory(d.sessions, null);
+  loadSettings(d.settings);
+  $("input").focus();
+});
+</script>
+</body>
+</html>

@@ -1,19 +1,18 @@
 """AgentRouter клиенті — OpenAI-compatible API арқылы GPT-5, DeepSeek және т.б."""
 
 import logging
-import os
 
+from aidos.core.config import AGENTROUTER_API_KEY, AGENTROUTER_MODEL
 from aidos.core.ollama_client import SYSTEM_PROMPT
+from aidos.core.settings import settings
 
 logger = logging.getLogger("aidos.agentrouter")
 
-AGENTROUTER_API_KEY: str = os.getenv("AGENTROUTER_API_KEY", "")
-AGENTROUTER_MODEL: str = os.getenv("AGENTROUTER_MODEL", "gpt-5")
 AGENTROUTER_BASE_URL = "https://agentrouter.org/v1"
 
 
 class AgentRouterClient:
-    def __init__(self) -> None:
+    def __init__(self, model: str | None = None) -> None:
         from openai import OpenAI
 
         if not AGENTROUTER_API_KEY:
@@ -36,7 +35,7 @@ class AgentRouterClient:
                 "X-Stainless-Retry-Count":     "0",
             },
         )
-        self._model = AGENTROUTER_MODEL
+        self._model = model or AGENTROUTER_MODEL
         logger.info("AgentRouterClient инициализацияланды, модель=%s", self._model)
 
     def is_available(self) -> bool:
@@ -62,6 +61,7 @@ class AgentRouterClient:
                 model=self._model,
                 messages=full_messages,
                 timeout=30,
+                max_tokens=settings.current.max_tokens,
             )
             content: str = response.choices[0].message.content
             logger.info("AgentRouter жауабы алынды, ұзындығы=%d таңба", len(content))
@@ -69,6 +69,19 @@ class AgentRouterClient:
         except Exception as exc:
             logger.error("AgentRouter chat қатесі: %s", exc)
             raise
+
+    def chat_stream(self, messages: list[dict], system: str | None = None):
+        full_messages = ([{"role": "system", "content": system}] if system else []) + messages
+        stream = self._client.chat.completions.create(
+            model=self._model,
+            messages=full_messages,
+            timeout=30,
+            max_tokens=settings.current.max_tokens,
+            stream=True,
+        )
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
 
     def chat_with_default_system(self, messages: list[dict]) -> str:
         return self.chat(messages, system=SYSTEM_PROMPT)

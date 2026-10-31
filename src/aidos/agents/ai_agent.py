@@ -49,7 +49,7 @@ class AIAgent:
 
     # ── Публичный API ─────────────────────────────────────────────────────────
 
-    def handle(self, query: str) -> str:
+    def handle(self, query: str, on_delta=None) -> str:
         _log.info("AIAgent.handle: '%s'", query[:80])
         self._memory.add_message(self._session_id, "user", query)
         self._extract_facts(query)
@@ -57,7 +57,7 @@ class AIAgent:
         system = self._build_system(query)
         messages = self._memory.get_session(self._session_id, limit=_MAX_HISTORY)
 
-        response = self._react(messages, system)
+        response = self._react(messages, system, on_delta)
 
         self._memory.add_message(self._session_id, "assistant", response)
         return response
@@ -74,13 +74,16 @@ class AIAgent:
 
     # ── ReAct цикл ────────────────────────────────────────────────────────────
 
-    def _react(self, messages: list[dict], system: str) -> str:
+    def _react(self, messages: list[dict], system: str, on_delta=None) -> str:
         """Reason → Act → Observe → Repeat → Answer."""
         working = list(messages)
 
         for step in range(_MAX_STEPS):
             try:
-                raw = self._client.chat(working, system=system)
+                if on_delta is None:
+                    raw = self._client.chat(working, system=system)
+                else:
+                    raw = self._stream_step(working, system, on_delta)
             except Exception as exc:
                 _log.error("LLM қатесі: %s", exc)
                 return "Кешіріңіз, жауап беру мүмкін болмады."
@@ -105,7 +108,31 @@ class AIAgent:
             })
 
         _log.warning("ReAct max қадам жетті (%d)", _MAX_STEPS)
+        # raw инструмент шақыруын қамтуы мүмкін — тазалап қайтару
+        if self._registry.parse_tool_call(raw) is not None:
+            return "Кешіріңіз, сұранысты өңдеу кезінде уақыт шектімі өтті."
         return raw.strip()
+
+    def _stream_step(self, working: list[dict], system: str, on_delta) -> str:
+        """Бір LLM қадамын стримдеу: мәтін бірден шығады, tool call JSON ұсталып қалады."""
+        raw = ""
+        emitted = 0
+        holding = False
+        for piece in self._client.chat_stream(working, system=system):
+            raw += piece
+            if holding:
+                continue
+            brace = raw.find("{", emitted)
+            fence = raw.find("```", emitted)
+            cut = min(i for i in (brace, fence, len(raw)) if i >= 0)
+            if cut < len(raw):
+                holding = True
+            if cut > emitted:
+                on_delta(raw[emitted:cut])
+                emitted = cut
+        if holding and self._registry.parse_tool_call(raw) is None:
+            on_delta(raw[emitted:])
+        return raw
 
     # ── Жүйелік prompt ────────────────────────────────────────────────────────
 

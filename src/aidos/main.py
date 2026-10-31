@@ -10,14 +10,14 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.text import Text
 
-from aidos.core.config import AI_PROVIDER, OLLAMA_MODEL, OPENROUTER_MODEL, AGENTROUTER_MODEL
-from aidos.core.ai_factory import create_ai_client
-from aidos.core.router import Intent, IntentRouter
-from aidos.agents.time_agent import TimeAgent
-from aidos.agents.weather_agent import WeatherAgent
+from aidos.agents.ai_agent import AIAgent
 from aidos.agents.music_agent import MusicAgent
 from aidos.agents.reminder_agent import ReminderAgent
-from aidos.agents.ai_agent import AIAgent
+from aidos.agents.time_agent import TimeAgent
+from aidos.agents.weather_agent import WeatherAgent
+from aidos.core.ai_factory import SwitchableAI
+from aidos.core.router import Intent, IntentRouter
+from aidos.core.settings import settings
 
 console = Console()
 _log = logging.getLogger("aidos.main")
@@ -89,9 +89,9 @@ def _build_router(ai_client, tts_callback) -> IntentRouter:
         ),
     )
     registry.register(
-        name="recall_fact",
-        description="Бұрын сақталған фактіні еске алу",
-        params={"key": "факт кілті"},
+        name="get_fact",
+        description="Бұрын сақталған деректі алу",
+        params={"key": "кілт"},
         handler=lambda key="": str(memory.get_fact(key) or "Табылмады"),
     )
     registry.register(
@@ -269,7 +269,8 @@ def main() -> None:
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--voice", action="store_true", help="Дауыс режимі (микрофон + TTS)")
     group.add_argument("--both", action="store_true", help="Аралас режим (мәтін кірісі + TTS)")
-    group.add_argument("--ui", action="store_true", help="Графикалық интерфейс (customtkinter)")
+    group.add_argument("--ui", action="store_true", help="Графикалық интерфейс (pywebview)")
+    group.add_argument("--ui-tk", action="store_true", help="Ескі графикалық интерфейс (customtkinter)")
     group.add_argument("--wake", action="store_true", help="Колонка режимі ('Айдос' триггері + TTS)")
     args = parser.parse_args()
 
@@ -283,33 +284,31 @@ def main() -> None:
         console.print(f"[bold cyan]Aidos:[/bold cyan] {text}")
         tts.speak(text)
 
-    # AI провайдерді таңдау (Strategy паттерн)
+    cfg = settings.current
     try:
-        ai_client = create_ai_client()
+        ai_client = SwitchableAI(cfg.llm_provider, cfg.llm_model)
     except ValueError as exc:
         console.print(f"[red]✗ AI клиент қатесі: {exc}[/red]")
         sys.exit(1)
 
-    if AI_PROVIDER == "openrouter":
-        active_model = OPENROUTER_MODEL
-    elif AI_PROVIDER == "agentrouter":
-        active_model = AGENTROUTER_MODEL
-    else:
-        active_model = OLLAMA_MODEL
     if ai_client.is_available():
-        console.print(f"[green]✓ {AI_PROVIDER} қосылды, модель: {active_model}[/green]")
+        console.print(f"[green]✓ {ai_client.provider_id} қосылды, модель: {ai_client.model}[/green]")
     else:
-        console.print(f"[yellow]⚠ {AI_PROVIDER} қол жетімсіз. AI жауаптары жұмыс істемейді.[/yellow]")
+        console.print(f"[yellow]⚠ {ai_client.provider_id} қол жетімсіз. AI жауаптары жұмыс істемейді.[/yellow]")
 
     router = _build_router(ai_client, tts_callback)
+    _mode = ("ui" if args.ui else "ui-tk" if args.ui_tk else "wake" if args.wake else
+             "voice" if args.voice else "both" if args.both else "text")
     _log.info("Aidos іске қосылды, режим=%s, провайдер=%s, модель=%s",
-               "voice" if args.voice else ("both" if args.both else "text"),
-               AI_PROVIDER, active_model)
+               _mode, ai_client.provider_id, ai_client.model)
 
     try:
         if args.ui:
+            from aidos.webui import run_webui
+            run_webui(router=router, tts=tts, ai_client=ai_client)
+        elif args.ui_tk:
             from aidos.ui import run_ui
-            run_ui(router=router, tts=tts)
+            run_ui(router=router, tts=tts, ai_client=ai_client)
         elif args.wake:
             run_wake_mode(router, tts)
         elif args.voice:
