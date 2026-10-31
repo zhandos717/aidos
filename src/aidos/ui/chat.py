@@ -1,47 +1,45 @@
-"""ChatArea — Jarvis стилінде хабар бабблдары мен кіріс панелі."""
+"""ChatArea — сәлемдесу экраны, хабарлар және кіріс панелі."""
 
 from __future__ import annotations
 
 import math
 import tkinter as tk
-from typing import Callable
+from collections.abc import Callable
 
 import customtkinter as ctk
 
+from aidos.ui.hud import IDLE, LISTENING, SPEAKING, THINKING, AICore
 from aidos.ui.theme import (
-    BG, BG3, BG4, CYAN, CYAN_DIM, CYAN_DARK, ORANGE, RED, TEXT, TEXT_SEC,
-    BUBBLE_USER, BUBBLE_AI,
+    ACCENT,
+    ACCENT2,
+    BG,
+    LINE,
+    LINE2,
+    RAISED,
+    SURFACE,
+    TEXT,
+    TEXT_MUTED,
+    TEXT_SEC,
+    font,
+    mix,
 )
 
+_STATE_TEXT = {
+    IDLE: "",
+    LISTENING: "Тыңдап тұрмын",
+    THINKING: "Ойланып жатырмын",
+    SPEAKING: "Сөйлеп тұрмын",
+}
 
-class ScanlineCanvas(tk.Canvas):
-    """Топ-барда жылжитын сканерлеу сызығы."""
+_SUGGESTIONS = [
+    "Бүгін ауа райы қандай?",
+    "Көңілді музыка қос",
+    "10 минуттан кейін еске сал",
+    "Расскажи что-нибудь интересное",
+]
 
-    def __init__(self, master, **kwargs) -> None:
-        bg = kwargs.pop("bg", "#041520")
-        super().__init__(master, height=2, bg=bg,
-                         highlightthickness=0, **kwargs)
-        self._x = 0
-        self._width = 400
-        self.bind("<Configure>", lambda e: setattr(self, "_width", e.width))
-        self._animate()
-
-    def _animate(self) -> None:
-        self.delete("all")
-        w = max(self._width, 50)
-        x0 = self._x % (w + 160) - 80
-        colors = [
-            "#001A22", "#003344", "#006688", "#00AACC",
-            "#00D4FF",
-            "#00AACC", "#006688", "#003344", "#001A22",
-        ]
-        seg = 14
-        for i, col in enumerate(colors):
-            px = x0 + (i - 4) * seg
-            if 0 <= px <= w:
-                self.create_line(px, 0, px + seg, 2, fill=col, width=2)
-        self._x += 5
-        self.after(16, self._animate)
+_WRAP_AI = 600
+_WRAP_USER = 440
 
 
 class ChatArea(ctk.CTkFrame):
@@ -52,192 +50,150 @@ class ChatArea(ctk.CTkFrame):
         on_mic: Callable,
         on_toggle_tts: Callable,
     ) -> None:
-        super().__init__(master, corner_radius=0, fg_color="#020A0F")
+        super().__init__(master, corner_radius=0, fg_color=BG)
         self._on_send = on_send
         self._on_mic = on_mic
         self._on_toggle_tts = on_toggle_tts
-        self._thinking_running = False
-        self._thinking_dot_idx = 0
-        self._entry_glow_t = 0.0
+        self._state = IDLE
+        self._recording = False
+        self._typing_row = None
+        self._stream = None
+        self._glow_t = 0.0
 
         self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
-        self._build()
-        self._start_entry_glow()
+        self._build_topbar()
+        self._build_body()
+        self._build_composer()
+        self._tick_glow()
 
     # ── Build ──────────────────────────────────────────────────────────────────
 
-    def _build(self) -> None:
-        self._build_topbar()
-        self._build_messages()
-        self._build_input()
-
     def _build_topbar(self) -> None:
-        topbar = ctk.CTkFrame(self, fg_color="#041520", height=56, corner_radius=0)
-        topbar.grid(row=0, column=0, sticky="ew")
-        topbar.grid_columnconfigure(2, weight=1)
-        topbar.grid_propagate(False)
-
-        # Left cyan accent bar
-        tk.Canvas(topbar, width=3, bg="#00D4FF",
-                  highlightthickness=0).grid(row=0, column=0, sticky="ns")
-
-        self.title_label = ctk.CTkLabel(
-            topbar,
-            text="//  ЖАҢА СЕАНС",
-            font=ctk.CTkFont(family="Courier", size=13, weight="bold"),
-            text_color=CYAN,
-        )
-        self.title_label.grid(row=0, column=1, padx=(10, 16), sticky="w")
-
-        # Moving scanline fills the remaining space
-        ScanlineCanvas(topbar, bg="#041520").grid(
-            row=0, column=2, sticky="ew", padx=4
-        )
-
-        self.tts_btn = ctk.CTkButton(
-            topbar,
-            text="◉",
-            width=36,
-            height=36,
-            corner_radius=4,
-            fg_color=CYAN_DARK,
-            hover_color="#0A2030",
-            text_color=CYAN,
-            border_width=1,
-            border_color=CYAN,
-            font=ctk.CTkFont(size=16),
-            command=self._on_toggle_tts,
-        )
-        self.tts_btn.grid(row=0, column=3, padx=(0, 12), sticky="e")
-
-    def _build_messages(self) -> None:
-        self._messages = ctk.CTkScrollableFrame(
-            self,
-            corner_radius=0,
-            fg_color="#020A0F",
-            scrollbar_button_color=BG3,
-            scrollbar_button_hover_color=BG4,
-        )
-        self._messages.grid(row=1, column=0, sticky="nsew")
-        self._messages.grid_columnconfigure(0, weight=1)
-
-        self.status = ctk.CTkLabel(
-            self, text="",
-            text_color=TEXT_SEC,
-            font=ctk.CTkFont(family="Courier", size=10),
-        )
-        self.status.grid(row=2, column=0, padx=20, pady=(4, 0), sticky="w")
-
-    def _build_input(self) -> None:
-        bar = ctk.CTkFrame(self, fg_color="#041520", corner_radius=0, height=76)
-        bar.grid(row=3, column=0, sticky="ew")
-        bar.grid_columnconfigure(0, weight=1)
+        bar = ctk.CTkFrame(self, fg_color=BG, height=60, corner_radius=0)
+        bar.grid(row=0, column=0, sticky="ew")
+        bar.grid_columnconfigure(1, weight=1)
         bar.grid_propagate(False)
 
-        # Top border glow line (animated)
-        self._border_canvas = tk.Canvas(bar, height=1, bg="#003344",
-                                        highlightthickness=0)
-        self._border_canvas.grid(row=0, column=0, sticky="ew")
+        self._mini_core = AICore(bar, size=34, bg=BG, detail=False)
+        self._mini_core.grid(row=0, column=0, padx=(24, 10), pady=13)
 
-        inner = ctk.CTkFrame(bar, fg_color="transparent")
-        inner.grid(row=1, column=0, padx=12, pady=10, sticky="ew")
-        inner.grid_columnconfigure(0, weight=1)
+        titles = ctk.CTkFrame(bar, fg_color="transparent")
+        titles.grid(row=0, column=1, sticky="w")
+        self.title_label = ctk.CTkLabel(titles, text="Жаңа әңгіме", text_color=TEXT, font=font(15, "bold"))
+        self.title_label.grid(row=0, column=0, sticky="w")
+        self._state_label = ctk.CTkLabel(titles, text="", text_color=TEXT_MUTED, font=font(12), height=14)
+        self._state_label.grid(row=1, column=0, sticky="w")
 
-        # Entry wrapper with animated border
-        self._entry_frame = ctk.CTkFrame(
-            inner, fg_color="#041520",
-            corner_radius=4, border_width=1, border_color=CYAN_DARK,
+        self.tts_btn = ctk.CTkButton(
+            bar, text="Дауыс қосулы", width=120, height=32, corner_radius=16,
+            fg_color=SURFACE, hover_color=RAISED, text_color=TEXT_SEC, font=font(12),
+            command=self._on_toggle_tts,
         )
-        self._entry_frame.grid(row=0, column=0, sticky="ew")
-        self._entry_frame.grid_columnconfigure(1, weight=1)
+        self.tts_btn.grid(row=0, column=2, padx=24)
 
+    def _build_body(self) -> None:
+        self._body = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+        self._body.grid(row=1, column=0, sticky="nsew")
+        self._body.grid_rowconfigure(0, weight=1)
+        self._body.grid_columnconfigure(0, weight=1)
+
+        self._messages = ctk.CTkScrollableFrame(
+            self._body, corner_radius=0, fg_color=BG,
+            scrollbar_button_color=BG, scrollbar_button_hover_color=LINE2,
+        )
+        self._messages.grid_columnconfigure(0, weight=1)
+
+        self._welcome = ctk.CTkFrame(self._body, fg_color=BG)
+        self._welcome.grid_columnconfigure(0, weight=1)
+        self._welcome.grid_rowconfigure(0, weight=1)
+        self._welcome.grid_rowconfigure(5, weight=1)
+        self._big_core = AICore(self._welcome, size=240, bg=BG)
+        self._big_core.grid(row=1, column=0, pady=(0, 18))
         ctk.CTkLabel(
-            self._entry_frame,
-            text="▶",
-            font=ctk.CTkFont(family="Courier", size=11),
-            text_color=CYAN,
-            width=22,
-        ).grid(row=0, column=0, padx=(8, 0))
+            self._welcome, text="Сәлем! Немен көмектесейін?", text_color=TEXT, font=font(26, "bold"),
+        ).grid(row=2, column=0)
+        ctk.CTkLabel(
+            self._welcome, text="Жазыңыз немесе микрофонды басып айтыңыз — қазақша да, орысша да түсінемін.",
+            text_color=TEXT_SEC, font=font(14),
+        ).grid(row=3, column=0, pady=(6, 22))
+
+        chips = ctk.CTkFrame(self._welcome, fg_color="transparent")
+        chips.grid(row=4, column=0)
+        for i, text in enumerate(_SUGGESTIONS):
+            ctk.CTkButton(
+                chips, text=text, height=36, corner_radius=18, fg_color=SURFACE, hover_color=RAISED,
+                border_width=1, border_color=LINE, text_color=TEXT_SEC, font=font(13),
+                command=lambda t=text: self._on_send(t),
+            ).grid(row=i // 2, column=i % 2, padx=5, pady=5)
+
+        self._show_welcome(True)
+
+    def _build_composer(self) -> None:
+        wrap = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+        wrap.grid(row=2, column=0, sticky="ew", padx=48, pady=(4, 6))
+        wrap.grid_columnconfigure(0, weight=1)
+
+        self._composer = ctk.CTkFrame(wrap, fg_color=SURFACE, corner_radius=26, border_width=1, border_color=LINE)
+        self._composer.grid(row=0, column=0, sticky="ew")
+        self._composer.grid_columnconfigure(0, weight=1)
 
         self.entry = ctk.CTkEntry(
-            self._entry_frame,
-            placeholder_text="КОМАНДА ЕНГІЗУ...",
-            placeholder_text_color="#1A4455",
-            height=44,
-            font=ctk.CTkFont(family="Courier", size=13),
-            corner_radius=0,
-            fg_color="transparent",
-            border_width=0,
-            text_color=CYAN,
+            self._composer, placeholder_text="Сұрағыңызды жазыңыз…", placeholder_text_color=TEXT_MUTED,
+            height=50, font=font(15), corner_radius=0, fg_color="transparent", border_width=0, text_color=TEXT,
         )
-        self.entry.grid(row=0, column=1, sticky="ew", padx=(4, 8))
+        self.entry.grid(row=0, column=0, sticky="ew", padx=(22, 8), pady=1)
         self.entry.bind("<Return>", self._handle_send)
 
         self.mic_btn = ctk.CTkButton(
-            inner,
-            text="◎",
-            width=44,
-            height=44,
-            corner_radius=4,
-            fg_color="#041520",
-            hover_color="#0A2030",
-            text_color=TEXT_SEC,
-            border_width=1,
-            border_color="#0A2030",
-            font=ctk.CTkFont(size=18),
+            self._composer, text="🎙", width=40, height=40, corner_radius=20,
+            fg_color=RAISED, hover_color=LINE2, text_color=TEXT, font=font(17),
             command=self._on_mic,
         )
-        self.mic_btn.grid(row=0, column=1, padx=(8, 0))
+        self.mic_btn.grid(row=0, column=1, padx=(0, 6))
 
         self.send_btn = ctk.CTkButton(
-            inner,
-            text="ЖІБЕРУ",
-            width=84,
-            height=44,
-            corner_radius=4,
-            fg_color=CYAN_DARK,
-            hover_color="#0A3050",
-            text_color=CYAN,
-            border_width=1,
-            border_color=CYAN,
-            font=ctk.CTkFont(family="Courier", size=11, weight="bold"),
-            command=self._handle_send,
+            self._composer, text="↑", width=40, height=40, corner_radius=20,
+            fg_color=ACCENT, hover_color=mix(ACCENT, "#FFFFFF", 0.2), text_color=BG,
+            text_color_disabled=TEXT_MUTED, font=font(19, "bold"), command=self._handle_send,
         )
-        self.send_btn.grid(row=0, column=2, padx=(8, 0))
+        self.send_btn.grid(row=0, column=2, padx=(0, 6))
 
-    # ── Animations ─────────────────────────────────────────────────────────────
+        self.status = ctk.CTkLabel(wrap, text="", text_color=TEXT_MUTED, font=font(11), height=18)
+        self.status.grid(row=1, column=0, pady=(4, 0))
 
-    def _start_entry_glow(self) -> None:
-        self._entry_glow_t = 0.0
-        self._tick_entry_glow()
+    # ── Күй ───────────────────────────────────────────────────────────────────
 
-    def _tick_entry_glow(self) -> None:
-        self._entry_glow_t += 0.04
-        intensity = (math.sin(self._entry_glow_t) + 1) / 2  # 0..1
-        g = int(50 + intensity * 80)    # 50..130
-        b = int(80 + intensity * 120)   # 80..200
-        color = f"#00{g:02x}{b:02x}"
-        try:
-            self._entry_frame.configure(border_color=color)
-            self._border_canvas.configure(bg=color)
-        except Exception:
-            pass
-        self.after(40, self._tick_entry_glow)
+    @property
+    def state(self) -> str:
+        return self._state
 
-    def _animate_thinking(self) -> None:
-        if not self._thinking_running:
-            return
-        frames = [
-            "AIDOS ОЙЛАНУДА  ·",
-            "AIDOS ОЙЛАНУДА  ··",
-            "AIDOS ОЙЛАНУДА  ···",
-            "AIDOS ОЙЛАНУДА  ····",
-        ]
-        self.status.configure(text=frames[self._thinking_dot_idx % 4])
-        self._thinking_dot_idx += 1
-        self.after(350, self._animate_thinking)
+    def set_state(self, state: str) -> None:
+        self._state = state
+        self._mini_core.set_state(state)
+        self._big_core.set_state(state)
+        self._state_label.configure(
+            text=_STATE_TEXT[state], text_color=ACCENT2 if state == LISTENING else TEXT_MUTED,
+        )
+
+    def _show_welcome(self, show: bool) -> None:
+        if show:
+            self._messages.grid_forget()
+            self._welcome.grid(row=0, column=0, sticky="nsew")
+            self._mini_core.grid_remove()
+        else:
+            self._welcome.grid_forget()
+            self._messages.grid(row=0, column=0, sticky="nsew")
+            self._mini_core.grid()
+
+    def _tick_glow(self) -> None:
+        """Жазу кезінде кіріс жиегі ақырын жыпылықтайды."""
+        if self._recording:
+            self._glow_t += 0.15
+            t = (math.sin(self._glow_t) + 1) / 2
+            self._composer.configure(border_color=mix(LINE2, ACCENT2, 0.4 + 0.6 * t))
+        self.after(40, self._tick_glow)
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -247,138 +203,137 @@ class ChatArea(ctk.CTkFrame):
             self.entry.delete(0, tk.END)
             self._on_send(text)
 
+    def _scroll_bottom(self) -> None:
+        try:
+            self._messages._parent_canvas.yview_moveto(1.0)
+        except tk.TclError:
+            pass
+
+    def _next_row(self) -> ctk.CTkFrame:
+        self._show_welcome(False)
+        row = ctk.CTkFrame(self._messages, fg_color="transparent")
+        row.grid(row=len(self._messages.winfo_children()), column=0, sticky="ew", padx=40, pady=8)
+        row.grid_columnconfigure(0, weight=1)
+        return row
+
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def clear(self) -> None:
         for w in self._messages.winfo_children():
             w.destroy()
+        self._typing_row = None
+        self._stream = None
+        self._show_welcome(True)
 
-    def add_bubble(self, sender: str, text: str, is_user: bool) -> None:
+    def add_bubble(self, sender: str, text: str, is_user: bool, animate: bool = True):
         try:
             if not self.winfo_exists():
+                return None
+        except tk.TclError:
+            return None
+        self._remove_typing()
+        row = self._next_row()
+
+        if is_user:
+            bubble = ctk.CTkFrame(row, fg_color=SURFACE, corner_radius=18)
+            bubble.grid(row=0, column=0, sticky="e")
+            ctk.CTkLabel(
+                bubble, text=text, text_color=TEXT, font=font(15), wraplength=_WRAP_USER, justify="left",
+            ).pack(padx=16, pady=10)
+            self.after(50, self._scroll_bottom)
+            return None
+
+        label = ctk.CTkLabel(
+            row, text="" if animate else text, text_color=TEXT, font=font(15),
+            wraplength=_WRAP_AI, justify="left", anchor="w",
+        )
+        label.grid(row=0, column=0, sticky="w")
+        if animate:
+            self._reveal(label, text.split(" "), 0)
+        self.after(50, self._scroll_bottom)
+        return label
+
+    def _reveal(self, label: ctk.CTkLabel, words: list[str], n: int) -> None:
+        try:
+            if not label.winfo_exists():
                 return
         except tk.TclError:
             return
-
-        row = len(self._messages.winfo_children())
-        outer = ctk.CTkFrame(self._messages, fg_color="transparent")
-        outer.grid(row=row, column=0, sticky="ew", padx=16, pady=5)
-        outer.grid_columnconfigure(0, weight=1)
-
-        if is_user:
-            bubble = ctk.CTkFrame(
-                outer, fg_color=BUBBLE_USER, corner_radius=4,
-                border_width=1, border_color="#0A3050",
-            )
-            bubble.grid(row=0, column=0, sticky="e")
-
-            ctk.CTkLabel(
-                bubble,
-                text="ПАЙДАЛАНУШЫ  ◈",
-                font=ctk.CTkFont(family="Courier", size=9),
-                text_color="#1A4455",
-            ).pack(anchor="e", padx=12, pady=(6, 0))
-
-            ctk.CTkLabel(
-                bubble,
-                text=text,
-                font=ctk.CTkFont(family="Courier", size=13),
-                text_color=CYAN,
-                wraplength=430,
-                justify="left",
-            ).pack(padx=14, pady=(2, 10))
+        n = min(len(words), n + 2)
+        label.configure(text=" ".join(words[:n]))
+        if n < len(words):
+            if n % 20 == 0:
+                self._scroll_bottom()
+            self.after(28, lambda: self._reveal(label, words, n))
         else:
-            row_inner = ctk.CTkFrame(outer, fg_color="transparent")
-            row_inner.grid(row=0, column=0, sticky="w")
+            self._scroll_bottom()
 
-            # Hex avatar
-            avatar = tk.Canvas(row_inner, width=36, height=36,
-                               bg="#020A0F", highlightthickness=0)
-            avatar.grid(row=0, column=0, sticky="n", padx=(0, 10), pady=2)
-            self._draw_hex_avatar(avatar)
+    def start_stream(self) -> None:
+        self._remove_typing()
+        self._stream = {"label": self.add_bubble("Aidos", "", is_user=False, animate=False), "text": "", "n": 0}
 
-            col = ctk.CTkFrame(row_inner, fg_color="transparent")
-            col.grid(row=0, column=1, sticky="w")
+    def append_stream(self, delta: str) -> None:
+        if not self._stream or self._stream["label"] is None:
+            return
+        self._stream["text"] += delta
+        self._stream["n"] += 1
+        self._stream["label"].configure(text=self._stream["text"] + " ▍")
+        if self._stream["n"] % 6 == 0:
+            self._scroll_bottom()
 
-            ctk.CTkLabel(
-                col,
-                text="◈  AIDOS  //  AI",
-                font=ctk.CTkFont(family="Courier", size=9),
-                text_color=TEXT_SEC,
-            ).pack(anchor="w", pady=(0, 2))
+    def finish_stream(self, text: str) -> None:
+        if self._stream and self._stream["label"] is not None:
+            self._stream["label"].configure(text=text)
+        self._stream = None
+        self._scroll_bottom()
 
-            bubble = ctk.CTkFrame(
-                col, fg_color=BUBBLE_AI, corner_radius=4,
-                border_width=1, border_color="#0A2030",
-            )
-            bubble.pack(anchor="w")
+    # ── Ойлану индикаторы ─────────────────────────────────────────────────────
 
-            label = ctk.CTkLabel(
-                bubble,
-                text="",
-                font=ctk.CTkFont(family="Courier", size=13),
-                text_color="#80C8E0",
-                wraplength=430,
-                justify="left",
-            )
-            label.pack(padx=14, pady=10)
-            speed = max(8, 20 - len(text) // 80)   # longer text → faster reveal
-            self._typewriter(label, text, 0, speed)
+    def _remove_typing(self) -> None:
+        if self._typing_row is not None:
+            self._typing_row.destroy()
+            self._typing_row = None
 
-        self.after(80, lambda: self._messages._parent_canvas.yview_moveto(1.0))
-
-    @staticmethod
-    def _draw_hex_avatar(canvas: tk.Canvas) -> None:
-        cx = cy = 18
-        r = 14
-        pts: list[float] = []
-        for i in range(6):
-            a = math.radians(i * 60 - 30)
-            pts += [cx + r * math.cos(a), cy + r * math.sin(a)]
-        canvas.create_polygon(pts, outline="#00D4FF", fill="#041520", width=1)
-        canvas.create_text(cx, cy, text="AI", fill="#00D4FF",
-                           font=("Courier", 8, "bold"))
-
-    def _typewriter(self, label: ctk.CTkLabel, text: str,
-                    idx: int, speed: int) -> None:
-        if idx <= len(text):
-            cursor = "▌" if idx < len(text) else ""
-            label.configure(text=text[:idx] + cursor)
-            if idx % 6 == 0:
-                try:
-                    self._messages._parent_canvas.yview_moveto(1.0)
-                except Exception:
-                    pass
-            self.after(speed, lambda: self._typewriter(label, text, idx + 1, speed))
-        else:
-            label.configure(text=text)
+    def _animate_typing(self, dots: list[tk.Canvas], step: int) -> None:
+        if self._typing_row is None:
+            return
+        for i, dot in enumerate(dots):
+            t = (math.sin(step * 0.25 - i * 0.9) + 1) / 2
+            dot.itemconfigure("d", fill=mix(LINE2, ACCENT, t))
+        self.after(40, lambda: self._animate_typing(dots, step + 1))
 
     def set_thinking(self, thinking: bool) -> None:
         if thinking:
-            self._thinking_running = True
-            self._thinking_dot_idx = 0
-            self.send_btn.configure(
-                state="disabled", fg_color="#020A0F",
-                text="···", text_color=TEXT_SEC,
-            )
-            self._animate_thinking()
+            self.send_btn.configure(state="disabled", fg_color=RAISED)
+            self._remove_typing()
+            self._typing_row = self._next_row()
+            holder = ctk.CTkFrame(self._typing_row, fg_color="transparent")
+            holder.grid(row=0, column=0, sticky="w", pady=6)
+            dots = []
+            for i in range(3):
+                dot = tk.Canvas(holder, width=10, height=10, bg=BG, highlightthickness=0)
+                dot.create_oval(1, 1, 9, 9, fill=LINE2, outline="", tags="d")
+                dot.grid(row=0, column=i, padx=3)
+                dots.append(dot)
+            self._animate_typing(dots, 0)
+            self.after(50, self._scroll_bottom)
         else:
-            self._thinking_running = False
-            self.send_btn.configure(
-                state="normal", fg_color=CYAN_DARK,
-                text="ЖІБЕРУ", text_color=CYAN,
-            )
-            self.status.configure(text="")
+            self._remove_typing()
+            self.send_btn.configure(state="normal", fg_color=ACCENT)
 
     def set_mic_recording(self, recording: bool) -> None:
+        self._recording = recording
         if recording:
-            self.mic_btn.configure(
-                text="◉", fg_color="#1A0500",
-                text_color=ORANGE, border_color=ORANGE,
-            )
-            self.status.configure(text="◉  ДАУЫС КІРУІ БЕЛСЕНДІ...")
+            self.mic_btn.configure(fg_color=ACCENT2, text_color=BG, hover_color=ACCENT2)
+            self.status.configure(text="Тыңдап тұрмын — 5 секунд сөйлеңіз", text_color=ACCENT2)
         else:
-            self.mic_btn.configure(
-                text="◎", fg_color="#041520",
-                text_color=TEXT_SEC, border_color="#0A2030",
-            )
+            self.mic_btn.configure(fg_color=RAISED, text_color=TEXT, hover_color=LINE2)
+            self._composer.configure(border_color=LINE)
+            self.status.configure(text="", text_color=TEXT_MUTED)
+
+    def set_tts_enabled(self, enabled: bool) -> None:
+        self.tts_btn.configure(
+            text="Дауыс қосулы" if enabled else "Дауыс өшірулі",
+            text_color=TEXT_SEC if enabled else TEXT_MUTED,
+            fg_color=SURFACE if enabled else BG,
+        )

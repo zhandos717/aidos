@@ -4,6 +4,7 @@ import logging
 import re
 from enum import Enum
 
+from aidos.core.settings import settings
 from aidos.core.skill_loader import SkillLoader
 
 logger = logging.getLogger("aidos.router")
@@ -50,7 +51,7 @@ class IntentRouter:
         self._agents[intent] = agent
         logger.debug("Агент тіркелді: intent=%s, agent=%s", intent, type(agent).__name__)
 
-    def route(self, text: str) -> str:
+    def route(self, text: str, on_delta=None) -> str:
         """Мәтінді талдап, дұрыс агентке бағыттау."""
         logger.info("Роутер: кіріс мәтін='%s'", text)
 
@@ -68,11 +69,11 @@ class IntentRouter:
         intent = self._detect_intent_by_keywords(text)
 
         # 3. Keyword матч болмаса → AI Classifier
-        if intent is None and self._classifier is not None:
+        if intent is None and self._classifier is not None and not settings.current.fast_mode:
             intent = self._classifier.classify(text)
             logger.info("AI classifier ниеті: %s", intent.value)
         elif intent is None:
-            logger.warning("Keyword матч жоқ, AI агентіне fallback")
+            logger.info("Keyword матч жоқ → AI агенті")
             intent = Intent.AI
 
         logger.info("Анықталған ниет: %s", intent.value)
@@ -87,6 +88,8 @@ class IntentRouter:
             return "Кешіріңіз, қызмет уақытша қол жетімсіз."
 
         try:
+            if on_delta is not None and intent == Intent.AI:
+                return agent.handle(text, on_delta=on_delta)  # type: ignore[union-attr]
             return agent.handle(text)  # type: ignore[union-attr]
         except Exception as exc:
             logger.error("Агент қатесі (intent=%s): %s", intent, exc)

@@ -9,16 +9,19 @@ from datetime import datetime
 
 import customtkinter as ctk
 
-from aidos.ui.theme import BG, BG3, BG4, BLUE, RED, UI_STATE_FILE, ICON_PNG
+from aidos.ui.chat import ChatArea
+from aidos.ui.hud import IDLE, LISTENING, SPEAKING, THINKING
 from aidos.ui.session import ChatSession
 from aidos.ui.sidebar import Sidebar
-from aidos.ui.chat import ChatArea
+from aidos.ui.theme import BG, ICON_PNG, UI_STATE_FILE
 
 
 class AidosUI(ctk.CTk):
-    def __init__(self, router, tts=None) -> None:
+    def __init__(self, router, tts=None, ai_client=None) -> None:
         super().__init__()
         self._router = router
+        self._ai = ai_client
+        self._settings_dialog = None
         self._tts = tts
         self._thinking = False
         self._recording = False
@@ -26,7 +29,7 @@ class AidosUI(ctk.CTk):
         self._voice_input = None
         self._current_session: ChatSession | None = None
 
-        self.title("AIDOS  //  J.A.R.V.I.S")
+        self.title("Aidos")
         self.minsize(720, 500)
         self.configure(fg_color=BG)
         self._set_icon()
@@ -35,6 +38,7 @@ class AidosUI(ctk.CTk):
 
         self._build_ui()
         self._sidebar.refresh()
+        self._update_footer()
         self._new_chat()
 
     # ── Терезе ────────────────────────────────────────────────────────────────
@@ -84,6 +88,7 @@ class AidosUI(ctk.CTk):
             self,
             on_new_chat=self._new_chat,
             on_open_session=self._open_session,
+            on_settings=self._open_settings,
         )
         self._sidebar.grid(row=0, column=0, sticky="nsew")
 
@@ -99,12 +104,22 @@ class AidosUI(ctk.CTk):
 
     def _toggle_tts(self) -> None:
         self._tts_enabled = not self._tts_enabled
-        if self._tts_enabled:
-            self._chat.tts_btn.configure(text="◉", fg_color="#003344",
-                                         text_color=BLUE, border_color=BLUE)
-        else:
-            self._chat.tts_btn.configure(text="◎", fg_color=BG3,
-                                         text_color=BG4, border_color=BG3)
+        self._chat.set_tts_enabled(self._tts_enabled)
+
+    # ── Баптаулар ─────────────────────────────────────────────────────────────
+
+    def _open_settings(self) -> None:
+        if self._ai is None:
+            return
+        if self._settings_dialog is not None and self._settings_dialog.winfo_exists():
+            self._settings_dialog.focus()
+            return
+        from aidos.ui.settings_dialog import SettingsDialog
+        self._settings_dialog = SettingsDialog(self, self._ai, self._tts, on_applied=self._update_footer)
+
+    def _update_footer(self) -> None:
+        if self._ai is not None:
+            self._sidebar.set_footer(self._ai.model)
 
     # ── Микрофон ──────────────────────────────────────────────────────────────
 
@@ -113,6 +128,7 @@ class AidosUI(ctk.CTk):
             return
         self._recording = True
         self._chat.set_mic_recording(True)
+        self._chat.set_state(LISTENING)
         threading.Thread(target=self._record_and_send, daemon=True).start()
 
     def _record_and_send(self) -> None:
@@ -122,7 +138,8 @@ class AidosUI(ctk.CTk):
                 self._voice_input = VoiceInput()
             text = self._voice_input.listen()
         except Exception as exc:
-            self.after(0, lambda: self._chat.status.configure(text=f"Микрофон қатесі: {exc}"))
+            message = f"Микрофон қатесі: {exc}"
+            self.after(0, lambda: self._chat.status.configure(text=message))
             self.after(0, self._reset_mic)
             return
 
@@ -136,6 +153,8 @@ class AidosUI(ctk.CTk):
     def _reset_mic(self) -> None:
         self._recording = False
         self._chat.set_mic_recording(False)
+        if self._chat.state == LISTENING:
+            self._chat.set_state(IDLE)
 
     def _dispatch_voice_text(self, text: str) -> None:
         self._chat.entry.delete(0, tk.END)
@@ -148,22 +167,20 @@ class AidosUI(ctk.CTk):
         session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._current_session = ChatSession(session_id=session_id)
         self._chat.clear()
-        self._chat.title_label.configure(text="//  ЖАҢА СЕАНС")
-        self._chat.add_bubble(
-            "Aidos",
-            "ЖҮЙЕ ІСКЕ ҚОСЫЛДЫ. Мен Aidos — сіздің қазақ AI көмекшіңізмін. Сұрақ қойыңыз.",
-            is_user=False,
-        )
+        self._chat.title_label.configure(text="Жаңа әңгіме")
+        self._sidebar.set_active(None)
 
     def _open_session(self, session: ChatSession) -> None:
         self._current_session = session
         self._chat.clear()
-        self._chat.title_label.configure(text=f"//  {session.title}")
+        self._chat.title_label.configure(text=session.title)
+        self._sidebar.set_active(session.session_id)
         for msg in session.messages:
             self._chat.add_bubble(
                 msg["sender"],
                 msg["text"],
                 is_user=msg["sender"] == "Сіз",
+                animate=False,
             )
 
     # ── Жіберу ────────────────────────────────────────────────────────────────
@@ -175,20 +192,55 @@ class AidosUI(ctk.CTk):
         self._chat.add_bubble("Сіз", text, is_user=True)
         if self._current_session:
             self._current_session.add("Сіз", text)
-            self._chat.title_label.configure(text=f"//  {self._current_session.title}")
-            self.after(0, self._sidebar.refresh)
+            self._chat.title_label.configure(text=self._current_session.title)
+            self.after(0, self._sidebar.set_active, self._current_session.session_id)
 
         self._thinking = True
         self._chat.set_thinking(True)
+        self._chat.set_state(THINKING)
 
         threading.Thread(target=self._process, args=(text,), daemon=True).start()
 
     def _process(self, text: str) -> None:
+        speech = None
+        streamed = False
+
+        def on_delta(delta: str) -> None:
+            nonlocal speech, streamed
+            if not streamed:
+                streamed = True
+                self.after(0, self._on_stream_start)
+                if self._tts and self._tts_enabled:
+                    speech = self._tts.stream()
+            self.after(0, self._chat.append_stream, delta)
+            if speech:
+                speech.feed(delta)
+
         try:
-            response = self._router.route(text)
+            response = self._router.route(text, on_delta=on_delta)
         except Exception as exc:
             response = f"Қате: {exc}"
-        self.after(0, self._on_response, response)
+
+        if not streamed:
+            self.after(0, self._on_response, response)
+            return
+        self.after(0, self._on_stream_done, response)
+        if speech:
+            speech.close()
+            speech.wait()
+        self.after(0, self._chat.set_state, IDLE)
+
+    def _on_stream_start(self) -> None:
+        self._thinking = False
+        self._chat.set_thinking(False)
+        self._chat.start_stream()
+        self._chat.set_state(SPEAKING if self._tts and self._tts_enabled else IDLE)
+
+    def _on_stream_done(self, response: str) -> None:
+        self._chat.finish_stream(response)
+        if self._current_session:
+            self._current_session.add("Aidos", response)
+            self._sidebar.refresh()
 
     def _on_response(self, response: str) -> None:
         try:
@@ -206,4 +258,13 @@ class AidosUI(ctk.CTk):
         self._chat.set_thinking(False)
 
         if self._tts and self._tts_enabled:
-            threading.Thread(target=self._tts.speak, args=(response,), daemon=True).start()
+            self._chat.set_state(SPEAKING)
+            threading.Thread(target=self._speak, args=(response,), daemon=True).start()
+        else:
+            self._chat.set_state(IDLE)
+
+    def _speak(self, text: str) -> None:
+        try:
+            self._tts.speak(text)
+        finally:
+            self.after(0, self._chat.set_state, IDLE)
